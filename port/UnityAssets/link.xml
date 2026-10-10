@@ -1,0 +1,16 @@
+<!--
+  IL2CPP strips code it can't see being used. EtG leans on reflection
+  (FullInspector / FullSerializer, PlayMaker actions, Daikon Forge bindings),
+  so keep the game assemblies whole.
+-->
+<linker>
+  <!-- Assembly-CSharp / -firstpass / Assembly-UnityScript, renamed by the patcher -->
+  <assembly fullname="EtgGame" preserve="all" />
+  <assembly fullname="EtgGameFirstpass" preserve="all" />
+  <assembly fullname="EtgUnityScript" preserve="all" />
+  <assembly fullname="PlayMaker" preserve="all" />
+  <assembly fullname="dfScriptLite" preserve="all" />
+  <assembly fullname="ConditionalExpression" preserve="all" />
+  <assembly fullname="WebShim" preserve="all" />
+  <assembly fullname="UnityEngine.CoreModule" preserve="all" />
+</linker>

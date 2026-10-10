@@ -1,0 +1,13 @@
+# Whitelist: only the port's own sources are tracked.
+# Game files, the ripped Unity project, decompiled code and builds contain
+# Dodge Roll's copyrighted assets/code (and are gigabytes) - never commit them.
+/*
+!/.gitignore
+!/.gitattributes
+!/README.md
+!/port/
+
+# build outputs
+port/build/
+port/**/bin/
+port/**/obj/
