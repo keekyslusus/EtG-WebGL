@@ -67,6 +67,10 @@ public static class EtgWebBuild
         // AssetRipper leaves this empty; 2017.4's WebGL postprocessor crashes on template.Split(':')[1].
         PlayerSettings.WebGL.template = "APPLICATION:Default";
         PlayerSettings.WebGL.memorySize = 1536;
+        // EtG logs a lot every frame (e.g. "Unable to find clip 'select_idle'"); building a managed
+        // stack trace for each Log/Warning is what makes that expensive in the browser.
+        PlayerSettings.SetStackTraceLogType(LogType.Log, StackTraceLogType.None);
+        PlayerSettings.SetStackTraceLogType(LogType.Warning, StackTraceLogType.None);
         // 2017.4 always links an asm.js fallback first, and Emscripten's JS optimizer
         // (eliminate/registerizeHarder) takes hours on Mono's 2.8 MB Regex CILCompiler function.
         // asm2wasm -O3 optimizes the wasm build on its own, so skip the JS passes.
@@ -162,6 +166,100 @@ public static class EtgWebBuild
         Debug.Log("[EtG Web] Built " + manifest.GetAllAssetBundles().Length + " bundles into " + BundleOutput);
     }
 
+    [MenuItem("EtG Web/Fix Texture Formats (original game formats)")]
+    public static void FixTextureFormats()
+    {
+        // AssetRipper keeps each texture's original format in the .meta (top-level "textureFormat")
+        // but imports everything as "Compressed / automatic", so Unity turns EtG's uncompressed
+        // pixel art (RGBA32/RGB24/Alpha8) into DXT. That smears the sprites and breaks the game's
+        // runtime pixel work (palettes, Resize: "Unsupported texture format - needs to be ARGB32...").
+        // Pin the WebGL import format to the original one.
+        int changed = 0;
+        string[] guids = AssetDatabase.FindAssets("t:Texture2D", new[] { "Assets" });
+        AssetDatabase.StartAssetEditing();
+        try
+        {
+            foreach (string guid in guids)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                TextureImporter importer = AssetImporter.GetAtPath(path) as TextureImporter;
+                int original = ReadOriginalTextureFormat(path + ".meta");
+                if (importer == null || original <= 0)
+                {
+                    continue;
+                }
+                TextureImporterFormat format = (TextureImporterFormat)original;
+                bool uncompressed = format == TextureImporterFormat.Alpha8 || format == TextureImporterFormat.RGB24
+                    || format == TextureImporterFormat.RGBA32 || format == TextureImporterFormat.ARGB32;
+                TextureImporterPlatformSettings webgl = importer.GetPlatformTextureSettings("WebGL");
+                if (webgl.overridden && webgl.format == format)
+                {
+                    continue;
+                }
+                webgl.overridden = true;
+                webgl.format = format;
+                webgl.maxTextureSize = importer.maxTextureSize;
+                webgl.textureCompression = uncompressed ? TextureImporterCompression.Uncompressed : TextureImporterCompression.Compressed;
+                webgl.crunchedCompression = false;
+                importer.SetPlatformTextureSettings(webgl);
+                AssetDatabase.WriteImportSettingsIfDirty(path);
+                AssetDatabase.ImportAsset(path);
+                changed++;
+            }
+        }
+        finally
+        {
+            AssetDatabase.StopAssetEditing();
+        }
+        Debug.Log("[EtG Web] Texture formats pinned to originals: " + changed + " of " + guids.Length + " textures changed");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TopLevelTextureFormat =
+        new System.Text.RegularExpressions.Regex(@"^  textureFormat: (-?\d+)\s*$", System.Text.RegularExpressions.RegexOptions.Multiline);
+
+    private static int ReadOriginalTextureFormat(string metaPath)
+    {
+        if (!File.Exists(metaPath))
+        {
+            return -1;
+        }
+        var m = TopLevelTextureFormat.Match(File.ReadAllText(metaPath));
+        return m.Success ? int.Parse(m.Groups[1].Value) : -1;
+    }
+
+    [MenuItem("EtG Web/Rebuild Bundles Only -> webbuild")]
+    public static void RebuildBundlesIntoWebBuild()
+    {
+        // For asset-only changes (shaders, textures, prefabs inside bundles): no IL2CPP, no player
+        // build. BootLoader caches bundles by manifest hash, so browsers re-download only what changed.
+        // Assets that live in the player data itself (the Boot/LoadingDungeon scenes and what they
+        // reference directly, Resources/) still need a full player build.
+        string target = Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput));
+        if (!File.Exists(Path.Combine(target, "index.html")))
+        {
+            throw new Exception("[EtG Web] No player build in " + target + " yet - run a full build first");
+        }
+        FixTextureFormats();
+        BuildBundles();
+
+        string source = Path.GetFullPath(BundleOutput);
+        string dest = Path.Combine(Path.Combine(target, "StreamingAssets"), "Assets");
+        int copied = 0;
+        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".meta"))
+            {
+                continue;
+            }
+            string relative = file.Substring(source.Length).TrimStart('\\', '/');
+            string to = Path.Combine(dest, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(to));
+            File.Copy(file, to, true);
+            copied++;
+        }
+        Debug.Log("[EtG Web] Copied " + copied + " bundle files into " + dest + " - reload the page");
+    }
+
     [MenuItem("EtG Web/4. Build WebGL Player (Development)")]
     public static void BuildDevelopment()
     {
@@ -179,6 +277,7 @@ public static class EtgWebBuild
     {
         SetupBootScene();
         ApplyPlayerSettings();
+        FixTextureFormats();
         BuildBundles();
         BuildDevelopment();
     }

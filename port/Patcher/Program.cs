@@ -454,6 +454,10 @@ internal static class Program
                     }
                     break;
 
+                case "UnityEngine.Screen":
+                    replacement = sig == "get_resolutions()" ? shim.Screen("GetResolutions") : null;
+                    break;
+
                 case "UnityEngine.WWW":
                     replacement = sig == "GetMovieTexture()" ? shim.Media("GetMovieTexture", "UnityEngine.WWW") : null;
                     break;
@@ -518,6 +522,7 @@ internal static class Program
         public MethodDefinition Bundle(string name, params string[] parameters) => Find("WebShim.BundleShim", name, parameters);
         public MethodDefinition File(string name, params string[] parameters) => Find("WebShim.FileShim", name, parameters);
         public MethodDefinition Media(string name, params string[] parameters) => Find("WebShim.MediaShim", name, parameters);
+        public MethodDefinition Screen(string name, params string[] parameters) => Find("WebShim.ScreenShim", name, parameters);
         public AssemblyNameDefinition AssemblyName => shim.Assembly.Name;
 
         private MethodDefinition Find(string typeName, string name, string[] parameters)
