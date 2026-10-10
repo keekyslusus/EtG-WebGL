@@ -11,15 +11,15 @@ using UnityEngine.Rendering;
 // no string interpolation, no expression-bodied members, no ?. operator.
 public static class EtgWebBuild
 {
-    private const string BootScenePath = "Assets/Scenes/Boot.unity";
+    internal const string BootScenePath = "Assets/Scenes/Boot.unity";
     // The original game's only built-in scene (level0); everything else comes from bundles.
-    private const string FirstGameScenePath = "Assets/Scenes/LoadingDungeon.unity";
+    internal const string FirstGameScenePath = "Assets/Scenes/LoadingDungeon.unity";
     private const string BundleOutput = "Assets/StreamingAssets/Assets";
     // Relative to Assets/: Assets -> ExportedProject -> ripped -> etg/webbuild
     private const string PlayerOutput = "../../../webbuild";
 
     // Recovered from the original bundles with AssetRipper: which scene each scene-bundle held.
-    private static readonly Dictionary<string, string> SceneBundles = new Dictionary<string, string>
+    internal static readonly Dictionary<string, string> SceneBundles = new Dictionary<string, string>
     {
         { "Assets/Scenes/tt_foyer.unity", "foyer_001" },
         { "Assets/Scenes/Foyer.unity", "foyer_002" },

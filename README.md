@@ -55,6 +55,25 @@ port/
 
 Лог сборки Unity: `%LOCALAPPDATA%\Unity\Editor\Editor.log`.
 
+## Быстрая проверка в Play Mode
+
+WebGL-сборка идёт ~13 минут, а большинство ошибок рантаймовые — их быстрее ловить в редакторе.
+**EtG Web → Play From Boot**: открывает `Boot.unity` и запускает Play Mode с симуляцией бандлов.
+Бандлы из StreamingAssets (собраны под WebGL) не грузятся: `BundleShim` отдаёт ассеты прямо из проекта
+через `AssetDatabase` по их `assetBundleName`. Сцены из бандлов (`tt_foyer`, `Foyer`, `Foyer_Coop`, `tt6`) на время
+Play Mode добавляются в Build Settings и убираются после выхода.
+
+- Флаг **EtG Web → Simulate Bundles In Play Mode** (EditorPrefs, по умолчанию включён) действует и на обычный Play.
+- Патчер перенаправляет все инстансные вызовы `AssetBundle` в игре (`LoadAsset*`, `GetAllScenePaths`) в `BundleShim`;
+  для настоящего бандла вызывается оригинальный метод, поэтому WebGL-сборка работает как раньше.
+- Бандл-заглушка — объект `AssetBundle` без нативной части, и `== null` для него возвращает `true`. Игра от этого только
+  повторно запрашивает бандл у `ResourceManager`, где он уже закэширован.
+- Сейвы Play Mode лежат в `etg/editor-saves`, а не в `LocalLow/Dodge Roll/Enter the Gungeon`. У проекта те же
+  company/product name, что у игры, так что без перенаправления редактор писал бы в настоящий Steam-сейв.
+- Play From Boot включает **Edit → Graphics Emulation → WebGL 2.0**. По умолчанию для WebGL-таргета стоит эмуляция
+  WebGL 1.0, а плеер работает только на WebGL 2. Но рендер всё равно идёт через D3D11, так что графика
+  (шейдеры, render texture) может отличаться от браузера.
+
 ## Ограничения
 
 - **Нет звука**: Wwise нативный, банки под Windows. План — шим `AkSoundEngine.PostEvent` → `AudioSource`.

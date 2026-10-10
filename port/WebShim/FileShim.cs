@@ -49,6 +49,23 @@ namespace WebShim
         }
 
         /// <summary>
+        /// Replaces Application.persistentDataPath in the game. The project has the game's company and
+        /// product name, so in the editor that path is the real Steam save folder
+        /// (LocalLow/Dodge Roll/Enter the Gungeon); Play Mode saves go to etg/editor-saves instead.
+        /// </summary>
+        public static string PersistentDataPath()
+        {
+            if (!Application.isEditor)
+            {
+                return Application.persistentDataPath;
+            }
+            // dataPath = etg/ripped/ExportedProject/Assets
+            string path = Path.GetFullPath(Path.Combine(Application.dataPath, "../../../editor-saves"));
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
+        /// <summary>
         /// File.Create(path, bufferSize, options) is missing from some of Unity's 2.0 class library
         /// profiles. FileOptions (WriteThrough) is meaningless on the in-memory WebGL file system anyway.
         /// </summary>

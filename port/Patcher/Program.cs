@@ -8,7 +8,8 @@ namespace EtgWebPatcher;
 ///  - every P/Invoke (Wwise, Steam, Galaxy, InControl native, user32...) becomes a managed stub
 ///    returning default values, so nothing tries to call a native library that doesn't exist in wasm;
 ///  - System.Threading.Thread usage is redirected to WebShim.ThreadShim (runs bodies synchronously);
-///  - AssetBundle.LoadFromFile is redirected to WebShim.BundleShim (bundles preloaded at boot);
+///  - AssetBundle.LoadFromFile is redirected to WebShim.BundleShim (bundles preloaded at boot), and so
+///    are instance AssetBundle calls (LoadAsset..., GetAllScenePaths) for the editor's bundle simulation;
 ///  - File.Move/Delete/Copy/Write* are redirected to WebShim.FileShim (flush IndexedDB after saves);
 ///  - assemblies with names Unity reserves for its own script assemblies (Assembly-CSharp...) are
 ///    renamed, otherwise the editor silently ignores them and every MonoBehaviour shows as missing.
@@ -49,6 +50,15 @@ internal static class Program
     private static readonly (string Type, string Method, string Target)[] BodyRedirects =
     {
         ("GameManager", "AttemptSoundEngineInitializationAsync", "AttemptSoundEngineInitialization"),
+    };
+
+    // Methods whose body becomes "return default". WindowsResolutionManager.TrySetDisplay moves the
+    // Win32 window; with user32 stubbed its Position? lookups come back null and .Value throws - from
+    // GameManager.Awake as soon as SlotA.options holds a non-fullscreen mode, which aborts the rest of
+    // Awake (input stops working after the main menu). There is no window to move in a browser.
+    private static readonly (string Type, string Method)[] StubbedMethods =
+    {
+        ("BraveOptionsMenuItem/WindowsResolutionManager", "TrySetDisplay"),
     };
 
     // Types whose threads loop forever polling hardware; running them synchronously would hang.
@@ -147,6 +157,14 @@ internal static class Program
             il.Emit(OpCodes.Call, target);
             il.Emit(OpCodes.Ret);
             report.Count($"body redirected: {typeName}.{methodName} -> {targetName}");
+        }
+        foreach (var (typeName, methodName) in StubbedMethods)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                EmitDefaultBody(method);
+                report.Count($"stubbed: {typeName}.{methodName}");
+            }
         }
 
         // Drop references to native libraries nobody calls any more.
@@ -351,7 +369,13 @@ internal static class Program
         method.IsPreserveSig = false;
         method.IsInternalCall = false;
         method.ImplAttributes = MethodImplAttributes.IL | MethodImplAttributes.Managed;
+        EmitDefaultBody(method);
+        return true;
+    }
 
+    /// <summary>Replaces the body with one that zeroes out-params and returns default.</summary>
+    private static void EmitDefaultBody(MethodDefinition method)
+    {
         var body = new MethodBody(method) { InitLocals = true };
         method.Body = body;
         var il = body.GetILProcessor();
@@ -375,7 +399,6 @@ internal static class Program
             il.Emit(OpCodes.Ldloc, local);
         }
         il.Emit(OpCodes.Ret);
-        return true;
     }
 
     private static void RewriteCalls(ModuleDefinition module, TypeDefinition type, MethodDefinition method, ShimApi shim, Report report)
@@ -419,12 +442,41 @@ internal static class Program
                     break;
 
                 case "UnityEngine.AssetBundle":
-                    if (target.Name.StartsWith("LoadFrom"))
+                    if (!target.HasThis)
                     {
                         replacement = sig == "LoadFromFile(System.String)"
                             ? shim.Bundle("LoadFromFile", "System.String")
-                            : Unhandled(report, $"AssetBundle.{sig} in {where}");
+                            : target.Name.StartsWith("LoadFrom") ? Unhandled(report, $"AssetBundle.{sig} in {where}") : null;
+                        break;
                     }
+                    // Instance calls become BundleShim.X(bundle, args) so the editor's Play Mode can
+                    // answer them for simulated bundles; real bundles get the original call.
+                    if (target is GenericInstanceMethod generic)
+                    {
+                        if (sig == "LoadAsset(System.String)")
+                        {
+                            var shimGeneric = new GenericInstanceMethod(module.ImportReference(shim.BundleGeneric("LoadAsset", "UnityEngine.AssetBundle", "System.String")));
+                            foreach (var argument in generic.GenericArguments)
+                            {
+                                shimGeneric.GenericArguments.Add(argument);
+                            }
+                            ins.OpCode = OpCodes.Call;
+                            ins.Operand = shimGeneric;
+                            report.Count($"{declaring}.{target.Name}<T> -> BundleShim.{target.Name}<T>");
+                        }
+                        else
+                        {
+                            Unhandled(report, $"AssetBundle.{sig}<> in {where}");
+                        }
+                        continue;
+                    }
+                    replacement = sig switch
+                    {
+                        "LoadAsset(System.String)" => shim.Bundle("LoadAsset", "UnityEngine.AssetBundle", "System.String"),
+                        "LoadAsset(System.String,System.Type)" => shim.Bundle("LoadAsset", "UnityEngine.AssetBundle", "System.String", "System.Type"),
+                        "GetAllScenePaths()" => shim.Bundle("GetAllScenePaths", "UnityEngine.AssetBundle"),
+                        _ => Unhandled(report, $"AssetBundle.{sig} in {where}"),
+                    };
                     break;
 
                 case "System.IO.File":
@@ -452,6 +504,10 @@ internal static class Program
                         ins.OpCode = OpCodes.Callvirt;
                         report.Count("String.get_Length on StringBuilder -> StringBuilder.get_Length");
                     }
+                    break;
+
+                case "UnityEngine.Application":
+                    replacement = sig == "get_persistentDataPath()" ? shim.File("PersistentDataPath") : null;
                     break;
 
                 case "UnityEngine.Screen":
@@ -520,15 +576,16 @@ internal static class Program
     {
         public MethodDefinition Thread(string name, params string[] parameters) => Find("WebShim.ThreadShim", name, parameters);
         public MethodDefinition Bundle(string name, params string[] parameters) => Find("WebShim.BundleShim", name, parameters);
+        public MethodDefinition BundleGeneric(string name, params string[] parameters) => Find("WebShim.BundleShim", name, parameters, genericArity: 1);
         public MethodDefinition File(string name, params string[] parameters) => Find("WebShim.FileShim", name, parameters);
         public MethodDefinition Media(string name, params string[] parameters) => Find("WebShim.MediaShim", name, parameters);
         public MethodDefinition Screen(string name, params string[] parameters) => Find("WebShim.ScreenShim", name, parameters);
         public AssemblyNameDefinition AssemblyName => shim.Assembly.Name;
 
-        private MethodDefinition Find(string typeName, string name, string[] parameters)
+        private MethodDefinition Find(string typeName, string name, string[] parameters, int genericArity = 0)
         {
             var type = shim.GetType(typeName) ?? throw new InvalidOperationException($"{typeName} not found in WebShim");
-            return type.Methods.SingleOrDefault(m => m.Name == name && m.IsStatic
+            return type.Methods.SingleOrDefault(m => m.Name == name && m.IsStatic && m.GenericParameters.Count == genericArity
                        && m.Parameters.Select(p => p.ParameterType.FullName).SequenceEqual(parameters))
                    ?? throw new InvalidOperationException($"{typeName}.{name}({string.Join(",", parameters)}) not found in WebShim");
         }

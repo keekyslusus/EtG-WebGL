@@ -10,6 +10,8 @@ Fixes, all found by importing the decompiled shaders into Unity:
     decompiled code doesn't include. Meta passes are only used for lightmap baking.
   * Loop counters: USCSandbox emits `i` (compared, incremented with `i = i + 1.0`) but never
     declares or initializes it. Declared at the top of the function and zeroed before each loop.
+  * Built-in lighting keywords (LIGHTPROBE_SH, VERTEXLIGHT_ON, ...) emitted as shader_feature:
+    builds strip those variants, so they become multi_compile.
   * Single-shader decompiler slips, patched by exact text.
 """
 import re
@@ -130,9 +132,28 @@ def fix_loop_counters(block: str) -> str:
     return "".join(out)
 
 
+# Keywords Unity's forward renderer sets per draw call (never stored on materials).
+BUILTIN_KEYWORDS = ["LIGHTPROBE_SH", "VERTEXLIGHT_ON", "SHADOWS_SCREEN", "POINT", "SPOT",
+                    "SOFTPARTICLES_ON", "UNITY_HDR_ON", "SHADOWS_DEPTH", "SHADOWS_CUBE", "SHADOWS_SOFT"]
+SHADER_FEATURE_RE = re.compile(
+    r"^([ \t]*)#pragma shader_feature (" + "|".join(BUILTIN_KEYWORDS) + r")[ \t]*$", re.M)
+
+
+def fix_builtin_keywords(text: str) -> str:
+    # USCSandbox writes every single-keyword set as shader_feature. Builds strip shader_feature
+    # variants no material enables, and nothing enables these on a material - so bundles kept only
+    # the bare DIRECTIONAL variants (no ambient SH, no vertex lights) and the WebGL build rendered
+    # nearly black, while the editor, compiling variants on demand, looked fine.
+    return SHADER_FEATURE_RE.sub(
+        lambda m: f"{m.group(1)}{MARK}builtin keyword: shader_feature would strip it from builds\n"
+                  f"{m.group(1)}#pragma multi_compile __ {m.group(2)}", text)
+
+
 def fix_shader(text: str) -> str:
-    if MARK in text:
-        return text  # already fixed
+    already_fixed = MARK in text
+    text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files
+    if already_fixed:
+        return text
     name = re.match(r'Shader "([^"]+)"', text)
     for shader, wrong, right in EXACT_FIXES:
         if name and name.group(1) == shader:

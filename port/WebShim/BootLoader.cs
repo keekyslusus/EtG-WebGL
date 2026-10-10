@@ -26,6 +26,28 @@ namespace WebShim
             Application.runInBackground = true;
             string root = Application.streamingAssetsPath + "/Assets/";
 
+            if (BundleShim.Simulation && Application.isEditor)
+            {
+                // Editor Play Mode: nothing to download, assets come straight from the project.
+                // LoadFromFile registers a placeholder per bundle (which == calls null, so check
+                // registration instead).
+                string[] all = BundleShim.AllBundles;
+                for (int i = 0; i < all.Length; i++)
+                {
+                    m_current = all[i];
+                    BundleShim.LoadFromFile(root + all[i]);
+                    if (!BundleShim.IsRegistered(all[i]))
+                    {
+                        m_error = "Nothing in the project is tagged with bundle " + all[i];
+                        yield break;
+                    }
+                    m_done++;
+                }
+                Debug.Log("[WebShim] Bundle simulation: " + all.Length + " bundles served from the AssetDatabase");
+                SceneManager.LoadScene(1);
+                yield break;
+            }
+
             // BuildAssetBundles writes a manifest bundle named after the output folder ("Assets").
             AssetBundleManifest manifest = null;
             m_current = "manifest";

@@ -5,6 +5,8 @@
 !/.gitignore
 !/.gitattributes
 !/README.md
+!/open-gles30.ps1
+!/serve-webbuild.ps1
 !/port/
 
 # build outputs
