@@ -12,7 +12,8 @@ namespace WebShim
     /// </summary>
     public class BootLoader : MonoBehaviour
     {
-        // Bump to force browsers to re-download bundles after a rebuild.
+        // Used only if the bundle manifest can't be read; otherwise each bundle is cached under
+        // its content hash, so a rebuilt bundle is re-downloaded and an unchanged one isn't.
         public uint CacheVersion = 1;
 
         private int m_done;
@@ -24,6 +25,25 @@ namespace WebShim
         {
             Application.runInBackground = true;
             string root = Application.streamingAssetsPath + "/Assets/";
+
+            // BuildAssetBundles writes a manifest bundle named after the output folder ("Assets").
+            AssetBundleManifest manifest = null;
+            m_current = "manifest";
+            using (UnityWebRequest req = UnityWebRequest.GetAssetBundle(root + "Assets"))
+            {
+                yield return req.SendWebRequest();
+                AssetBundle manifestBundle = (req.isNetworkError || req.isHttpError) ? null : DownloadHandlerAssetBundle.GetContent(req);
+                if (manifestBundle != null)
+                {
+                    manifest = manifestBundle.LoadAsset<AssetBundleManifest>("AssetBundleManifest");
+                    manifestBundle.Unload(false);
+                }
+                if (manifest == null)
+                {
+                    Debug.LogWarning("[WebShim] No bundle manifest, caching bundles under version " + CacheVersion);
+                }
+            }
+
             string[] names = BundleShim.AllBundles;
             for (int i = 0; i < names.Length; i++)
             {
@@ -35,7 +55,9 @@ namespace WebShim
                     m_done++;
                     continue;
                 }
-                using (UnityWebRequest req = UnityWebRequest.GetAssetBundle(root + name, CacheVersion, 0u))
+                using (UnityWebRequest req = manifest != null
+                    ? UnityWebRequest.GetAssetBundle(root + name, manifest.GetAssetBundleHash(name), 0u)
+                    : UnityWebRequest.GetAssetBundle(root + name, CacheVersion, 0u))
                 {
                     AsyncOperation op = req.SendWebRequest();
                     while (!op.isDone)

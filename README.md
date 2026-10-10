@@ -33,20 +33,25 @@ port/
 2. **AssetRipper** (настройки: *Script Export Format* = `Dll Export Without Renaming`,
    *Shader Export Format* = `Decompilation`) → открыть папку игры → *Export Unity Project*
    в `ripped/`.
-3. **Unity закрыта** → `bash port/apply.sh`
+3. Шейдеры: AssetRipper вместо них пишет заглушки (`DummyShaderTextExporter`), поэтому
+   собрать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/uscs`
+   (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` рядом с exe) и запустить
+   `bash port/decompile_shaders.sh` — декомпилирует DX11-байткод всех шейдеров игры в `tools/uscs/out`.
+4. **Unity закрыта** → `bash port/apply.sh`
    Патчит DLL, переименовывает `Assembly-CSharp*` → `EtgGame*` (с сохранением GUID),
-   убирает Windows-бандлы и Wwise-банки из StreamingAssets, проверяет ссылки.
-4. **Один раз**: `asm2wasm` из Unity 2017 падает на большой сборке от переполнения стека.
+   заменяет шейдеры-заглушки декомпилированными, убирает Windows-бандлы и Wwise-банки
+   из StreamingAssets, проверяет ссылки.
+5. **Один раз**: `asm2wasm` из Unity 2017 падает на большой сборке от переполнения стека.
    Увеличить ему стек (нужны права администратора, оригинал сохраняется как `.orig`):
    ```
    python port/setstack.py <копия asm2wasm.exe> 1073741824
    ```
    и подложить копию вместо
    `<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/BuildTools/Emscripten_FastComp_Win/binaryen/bin/asm2wasm.exe`.
-5. Открыть `ripped/ExportedProject` в Unity 2017.4.27f1 → меню **EtG Web → Do Everything (1-4)**
+6. Открыть `ripped/ExportedProject` в Unity 2017.4.27f1 → меню **EtG Web → Do Everything (1-4)**
    (boot-сцена, настройки WebGL 2 / wasm / .NET 2.0, бандлы, dev-сборка в `webbuild/`).
    Дальше при изменениях порта: `apply.sh` → Ctrl+R в Unity → **4. Build WebGL Player**.
-6. Запускать через любой локальный HTTP-сервер из `webbuild/` (с `file://` не работает).
+7. Запускать через любой локальный HTTP-сервер из `webbuild/` (с `file://` не работает).
 
 Лог сборки Unity: `%LOCALAPPDATA%\Unity\Editor\Editor.log`.
 

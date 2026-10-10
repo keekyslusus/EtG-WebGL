@@ -46,6 +46,32 @@ done
 cp -f "$PORT/build/patched/"*.dll "$PLUGINS/"
 cp -rf "$PORT/UnityAssets/." "$PROJECT/Assets/"
 
+# Replace AssetRipper's dummy shaders with USCSandbox-decompiled ones (decompile_shaders.sh),
+# matched by the name in `Shader "..."`. The .meta files - and with them every material's
+# reference to the shader - stay untouched.
+SHADERS_OUT="$ROOT/tools/uscs/out"
+if [ -d "$SHADERS_OUT" ]; then
+    declare -A decompiled
+    while IFS= read -r -d '' f; do
+        name=$(head -1 "$f" | sed -nE 's/^Shader "(.*)" \{.*/\1/p')
+        [ -n "$name" ] && decompiled["$name"]="$f"
+    done < <(find "$SHADERS_OUT" -name '*.shader' -print0)
+    replaced=0; missing=0
+    while IFS= read -r -d '' f; do
+        name=$(head -1 "$f" | sed -nE 's/^Shader "(.*)" \{.*/\1/p')
+        if [ -n "${decompiled[$name]:-}" ]; then
+            if ! cmp -s "${decompiled[$name]}" "$f"; then
+                cp -f "${decompiled[$name]}" "$f"; replaced=$((replaced + 1))
+            fi
+        elif grep -q "DummyShaderTextExporter" "$f"; then
+            echo "   no decompiled shader for: $name"; missing=$((missing + 1))
+        fi
+    done < <(find "$PROJECT/Assets" -name '*.shader' -print0)
+    echo "   shaders: $replaced updated, $missing dummies without a match"
+else
+    echo "   (no decompiled shaders in $SHADERS_OUT - run decompile_shaders.sh; keeping dummies)"
+fi
+
 # A few prefabs serialize assembly-qualified type names (PlayMaker variables).
 grep -rlE 'Assembly-(CSharp|UnityScript)' "$PROJECT/Assets" --include=*.prefab --include=*.asset --include=*.unity 2>/dev/null |
 while read -r f; do
