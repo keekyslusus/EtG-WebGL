@@ -103,10 +103,18 @@ WebGL-сборка при этом должна вести себя **ровно
 
 ## Известные текущие проблемы (для справки, не цель задачи)
 
-- Breach рендерится чёрным; в консоли `Unsupported texture format - needs to be ARGB32...` и
-  `Can't resize to a compressed texture format`. Добавлен шаг `Fix Texture Formats` (оригинальные форматы
-  текстур для WebGL), результат ещё не проверен.
-- Каждый кадр: `Unable to find clip 'select_idle' in library` из `CharacterSelectIdleDoer` (ссылки на
-  анимационные библиотеки выглядят корректными).
-- `Material doesn't have a float or range property '_StencilVal'`.
+Состояние на 2026-10-11: в браузере игра проходит интро, титульник (меню PLAY/OPTIONS/QUIT), Breach и
+**загружает первый этаж** — персонаж, HUD, миникарта, генерация подземелья работают.
+
+- **Освещение / темнота (главная проблема).** Breach виден частично и очень тёмный, на этаже пол и стены
+  почти полностью чёрные, видны только персонаж и HUD. Вероятно, конвейер света EtG
+  (`Pixelator`, `Brave/Internal/GBuffer_Light*`, `GBuffer_LightMask*`): декомпилированные шейдеры света или
+  форматы render texture, которые WebGL 2 не умеет рендерить (float/half без `EXT_color_buffer_float`).
+- Титульник: внизу белая заливка вместо тёмной воды — вероятно `Brave/Effects/TitleWaterShader`.
+- `InvalidOperationException: Nullable object must have a value` в
+  `BraveOptionsMenuItem+WindowsResolutionManager.TrySetDisplay` — оконный Windows-код, на WebGL не нужен.
+- `Unable to find clip 'select_idle' in library` из `CharacterSelectIdleDoer` (ссылки на анимационные
+  библиотеки выглядят корректными), `Material doesn't have a float or range property '_StencilVal'`.
+- Текстуры: шаг `Fix Texture Formats` (оригинальные форматы для WebGL) убрал ошибки
+  `Unsupported texture format` / `Can't resize to a compressed texture format`.
 - Звука нет намеренно (Wwise заглушён).
