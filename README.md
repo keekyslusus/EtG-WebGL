@@ -37,7 +37,10 @@ port/
    склонировать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/src/USCSandbox`, применить
    `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (сохраняет ссылки render state на свойства
    материала — `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]` — и включает выключенный `USILAndOptimizer`:
-   без него `маска & float` превращается в целочисленный AND с усечённым литералом), собрать в `tools/uscs`
+   без него `маска & float` превращается в целочисленный AND с усечённым литералом, — и печатает float-литералы без
+   потери точности: формат `0.0#######` превращал `1e-10` из RGB→HSV в `0.0`, и серые пиксели давали NaN; DXBC `log` —
+   это `log2`, а не натуральный `log`, иначе `pow()` даёт не ту степень; свизл вида `.xyxy` у константы не
+   выбрасывается — без этого `_MainTex_TexelSize * float4(...)` брал ширину/высоту, и bloom заливал экран), собрать в `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` рядом с exe) и запустить
    `bash port/decompile_shaders.sh` — декомпилирует DX11-байткод всех шейдеров игры в `tools/uscs/out`.
 4. **Unity закрыта** → `bash port/apply.sh`

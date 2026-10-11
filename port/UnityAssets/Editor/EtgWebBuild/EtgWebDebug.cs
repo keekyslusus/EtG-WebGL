@@ -9,9 +9,23 @@ using UnityEngine.Rendering;
 
 // Play Mode diagnostics written to the console / Editor.log, so rendering state can be compared
 // with the original game without a debugger. Same C# 4 restrictions as EtgWebBuild.cs.
+[InitializeOnLoad]
 public static class EtgWebDebug
 {
-    [MenuItem("EtG Web/Debug/Dump Lighting _F5")]
+    // F5-F12 in Play Mode, read by WebShim.DebugKeys inside the game (menu hotkeys mis-fire here).
+    static EtgWebDebug()
+    {
+        WebShim.DebugKeys.Actions[0] = DumpLighting;            // F5
+        WebShim.DebugKeys.Actions[1] = SaveNearestLightTexture; // F6
+        WebShim.DebugKeys.Actions[2] = TogglePixelatorGBuffer;  // F7
+        WebShim.DebugKeys.Actions[3] = TogglePixelatorOcclusion; // F8
+        WebShim.DebugKeys.Actions[4] = ToggleBloom;             // F9
+        WebShim.DebugKeys.Actions[5] = CaptureBloomInput;       // F10
+        WebShim.DebugKeys.Actions[6] = ToggleShadowQuads;       // F11
+        WebShim.DebugKeys.Actions[7] = DumpRenderersAtCenter;   // F12
+    }
+
+    [MenuItem("EtG Web/Debug/Dump Lighting")]
     public static void DumpLighting()
     {
         StringBuilder sb = new StringBuilder("[EtG Debug] ==== Lighting dump ====\n");
@@ -94,7 +108,7 @@ public static class EtgWebDebug
 
     // Each ShadowSystem draws a quad with Brave/Tinted Multiply (Double) over its light: 0.5 keeps the
     // scene, more brightens, less darkens. Hiding them shows whether a dark spot comes from there.
-    [MenuItem("EtG Web/Debug/Toggle ShadowSystem Quads _F11")]
+    [MenuItem("EtG Web/Debug/Toggle ShadowSystem Quads")]
     public static void ToggleShadowQuads()
     {
         s_shadowQuadsHidden = !s_shadowQuadsHidden;
@@ -111,7 +125,7 @@ public static class EtgWebDebug
     }
 
     // Everything drawn over the screen centre: put an artifact there and see which object/shader it is.
-    [MenuItem("EtG Web/Debug/Dump Renderers At Center _F12")]
+    [MenuItem("EtG Web/Debug/Dump Renderers At Center")]
     public static void DumpRenderersAtCenter()
     {
         Camera cam = Camera.main;
@@ -155,17 +169,107 @@ public static class EtgWebDebug
         return path;
     }
 
+    // Reads the HDR frame right before the bloom effect (WebShim.DebugFrameCapture) and logs the
+    // hottest pixels / NaN / Inf; preview with them marked goes to etg/debug/bloom_input_<frame>.png.
+    [MenuItem("EtG Web/Debug/Capture Bloom Input")]
+    public static void CaptureBloomInput()
+    {
+        Camera cam = Camera.main;
+        Component bloom = cam == null ? null : cam.GetComponent("SENaturalBloomAndDirtyLens");
+        if (bloom == null)
+        {
+            Debug.LogWarning("[EtG Debug] No main camera with SENaturalBloomAndDirtyLens");
+            return;
+        }
+        WebShim.DebugFrameCapture capture = cam.GetComponent<WebShim.DebugFrameCapture>();
+        if (capture == null)
+        {
+            capture = cam.gameObject.AddComponent<WebShim.DebugFrameCapture>();
+        }
+        // OnRenderImage runs in component order: move the capture just above the bloom.
+        List<Component> components = new List<Component>(cam.GetComponents<Component>());
+        while (components.IndexOf(capture) > components.IndexOf(bloom))
+        {
+            UnityEditorInternal.ComponentUtility.MoveComponentUp(capture);
+            components = new List<Component>(cam.GetComponents<Component>());
+        }
+        WebShim.DebugFrameCapture.CaptureRequested = true;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex BrightProperty =
+        new System.Text.RegularExpressions.Regex("emiss|power|bright|intens|glow|value|hdr|boost|tint", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // Bloom blows up anything far above 1 in the HDR frame: list visible materials whose
+    // emission/brightness-like properties are large, biggest first.
+    [MenuItem("EtG Web/Debug/Dump Bright Materials In View")]
+    public static void DumpBrightMaterials()
+    {
+        List<KeyValuePair<float, string>> rows = new List<KeyValuePair<float, string>>();
+        HashSet<Material> seen = new HashSet<Material>();
+        foreach (Renderer r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+        {
+            if (!r.isVisible || !r.enabled)
+            {
+                continue;
+            }
+            foreach (Material m in r.sharedMaterials)
+            {
+                if (m == null || m.shader == null || !seen.Add(m))
+                {
+                    continue;
+                }
+                float max = 0f;
+                StringBuilder props = new StringBuilder();
+                for (int i = 0; i < ShaderUtil.GetPropertyCount(m.shader); i++)
+                {
+                    string name = ShaderUtil.GetPropertyName(m.shader, i);
+                    if (!BrightProperty.IsMatch(name))
+                    {
+                        continue;
+                    }
+                    ShaderUtil.ShaderPropertyType type = ShaderUtil.GetPropertyType(m.shader, i);
+                    if (type == ShaderUtil.ShaderPropertyType.Float || type == ShaderUtil.ShaderPropertyType.Range)
+                    {
+                        float v = m.GetFloat(name);
+                        max = Mathf.Max(max, Mathf.Abs(v));
+                        props.Append(name + "=" + v + " ");
+                    }
+                    else if (type == ShaderUtil.ShaderPropertyType.Color)
+                    {
+                        Color c = m.GetColor(name);
+                        max = Mathf.Max(max, Mathf.Max(c.r, Mathf.Max(c.g, c.b)));
+                        props.Append(name + "=" + c + " ");
+                    }
+                }
+                if (props.Length > 0)
+                {
+                    rows.Add(new KeyValuePair<float, string>(max, "  [" + max.ToString("0.##") + "] '" + GetPath(r.transform) + "' shader=" + m.shader.name +
+                                                                  " mat=" + m.name + " keywords=" + string.Join(" ", m.shaderKeywords) + " :: " + props));
+                }
+            }
+        }
+        rows.Sort(delegate(KeyValuePair<float, string> a, KeyValuePair<float, string> b) { return b.Key.CompareTo(a.Key); });
+        StringBuilder sb = new StringBuilder("[EtG Debug] ==== Bright materials in view (" + rows.Count + ") ====\n");
+        for (int i = 0; i < rows.Count && i < 40; i++)
+        {
+            sb.AppendLine(rows[i].Value);
+        }
+        Debug.Log(sb.ToString());
+    }
+
     // Bisecting the Pixelator stack: switch one stage off at a time and see what an artifact follows.
-    [MenuItem("EtG Web/Debug/Toggle Pixelator GBuffer Lights _F7")]
+    [MenuItem("EtG Web/Debug/Toggle Pixelator GBuffer Lights")]
     public static void TogglePixelatorGBuffer() { ToggleField("Pixelator", "DoRenderGBuffer"); }
 
-    [MenuItem("EtG Web/Debug/Toggle Pixelator Occlusion Layer _F8")]
+    [MenuItem("EtG Web/Debug/Toggle Pixelator Occlusion Layer")]
     public static void TogglePixelatorOcclusion() { ToggleField("Pixelator", "DoOcclusionLayer"); }
 
-    [MenuItem("EtG Web/Debug/Toggle Bloom _F9")]
-    public static void ToggleBloom() { ToggleEnabled("SENaturalBloomAndDirtyLens"); }
+    // Pixelator runs the bloom itself (ManualDoBloom, with the SENaturalBloomAndDirtyLens shader);
+    // the component's own enabled flag is re-set by the game every frame.
+    [MenuItem("EtG Web/Debug/Toggle Bloom")]
+    public static void ToggleBloom() { ToggleField("Pixelator", "ManualDoBloom"); }
 
-    [MenuItem("EtG Web/Debug/Toggle Fullscreen Effect _F10")]
+    [MenuItem("EtG Web/Debug/Toggle Fullscreen Effect")]
     public static void ToggleFullscreenEffect() { ToggleEnabled("GenericFullscreenEffect"); }
 
     private static void ToggleField(string typeName, string fieldName)
@@ -202,7 +306,7 @@ public static class EtgWebDebug
     }
 
     // Saves the shadow/light texture of the ShadowSystem closest to the screen centre to etg/debug/.
-    [MenuItem("EtG Web/Debug/Save Nearest Light Texture _F6")]
+    [MenuItem("EtG Web/Debug/Save Nearest Light Texture")]
     public static void SaveNearestLightTexture()
     {
         Camera cam = Camera.main;

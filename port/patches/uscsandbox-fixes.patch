@@ -217,6 +217,68 @@ index 2108c20..c278aae 100644
                  {
                      _sb.AppendNoIndent("0");
                  }
+diff --git a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
+index 4123eb1..49674a7 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
+@@ -170,7 +170,9 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+                     operand.metadataNameAssigned = true;
+                     operand.metadataNameWithArray = param.ArraySize > 1;
+ 
+-                    if (cbMasks.Count == maxRowOrColumnLength && !param.IsMatrix)
++                    // only an identity swizzle (.xyzw of a float4) can be dropped: cb0[2].xyxy must stay .xyxy,
++                    // or _MainTex_TexelSize * float4(...) silently mixes in (width, height)
++                    if (cbMasks.Count == maxRowOrColumnLength && !param.IsMatrix && cbMasks.Select((m, i) => m == i).All(x => x))
+                     {
+                         operand.displayMask = false;
+                     }
+diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
+index d9ae9e9..4ece2e8 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
+@@ -122,6 +122,19 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+             }
+         }
+ 
++        // "0.0#######" keeps at most 8 decimals: 1e-10 (the epsilon of the standard RGB->HSV code)
++        // came out as 0.0, turning every grey pixel's hue into 0/0 = NaN. Fall back to round-trip
++        // exponent notation whenever the short form would change the value.
++        private static string FormatFloat(float value)
++        {
++            string text = value.ToString("0.0#######", CultureInfo.InvariantCulture);
++            if (float.Parse(text, CultureInfo.InvariantCulture) == value || float.IsNaN(value) || float.IsInfinity(value))
++            {
++                return text;
++            }
++            return value.ToString("R", CultureInfo.InvariantCulture).Replace("E", "e");
++        }
++
+         public override string ToString()
+         {
+             return ToString(false);
+@@ -235,7 +248,7 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+                         {
+                             // todo: check if number can't possibly be expressed as float and write in hex.
+                             // todo: float precision isn't correct atm. add precision check somewhere.
+-                            body = $"{immValueFloat[0].ToString("0.0#######", CultureInfo.InvariantCulture)}";
++                            body = $"{FormatFloat(immValueFloat[0])}";
+                         }
+                         else
+                         {
+@@ -245,11 +258,11 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+                             {
+                                 if (i != immValueFloat.Length - 1)
+                                 {
+-                                    body += $"{immValueFloat[i].ToString("0.0#######", CultureInfo.InvariantCulture)}, ";
++                                    body += $"{FormatFloat(immValueFloat[i])}, ";
+                                 }
+                                 else
+                                 {
+-                                    body += $"{immValueFloat[i].ToString("0.0#######", CultureInfo.InvariantCulture)}";
++                                    body += $"{FormatFloat(immValueFloat[i])}";
+                                 }
+                             }
+                             body += ")";
 diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs b/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
 index f449a41..6efbe0b 100644
 --- a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
@@ -230,3 +292,17 @@ index f449a41..6efbe0b 100644
              // needs to be after AndOptimizer
              new USILObviousUIntFixer(),
              // //////////////////////////////
+diff --git a/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs b/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
+index 71ab873..b5db431 100644
+--- a/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
++++ b/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
+@@ -341,7 +341,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+         private void HandleLogarithm2(USILInstruction inst)
+         {
+             List<USILOperand> srcOps = inst.srcOperands;
+-            string value = $"log({srcOps[0]})";
++            // DXBC log is base 2 (HLSL log is natural): pow(x, n) compiles to exp2(log2(x) * n)
++            string value = $"log2({srcOps[0]})";
+             string comment = CommentString(inst);
+             AppendLine($"{comment}{inst.destOperand} = {value};");
+         }

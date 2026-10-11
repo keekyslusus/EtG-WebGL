@@ -25,6 +25,7 @@ namespace WebShim
         {
             Application.runInBackground = true;
             AmbientProbeShim.Install();
+            DebugKeys.Install();
             string root = Application.streamingAssetsPath + "/Assets/";
 
             if (BundleShim.Simulation && Application.isEditor)
