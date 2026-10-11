@@ -307,6 +307,36 @@ public static class EtgWebBuild
         {
             Debug.LogWarning("[EtG Web] Build succeeded, errors logged during build: " + report);
         }
+        CopySite(output);
         Debug.Log("[EtG Web] WebGL build written to " + output);
+    }
+
+    // The page around the player (port/site; see install.py there, which does the same by hand).
+    // Replaces the index.html that the Default template writes on every player build.
+    private const string SiteDir = "../../../port/site";
+
+    [MenuItem("EtG Web/Copy Site Page -> webbuild")]
+    public static void CopySiteToWebBuild()
+    {
+        CopySite(Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput)));
+    }
+
+    private static void CopySite(string output)
+    {
+        string site = Path.GetFullPath(Path.Combine(Application.dataPath, SiteDir));
+        foreach (string pattern in new[] { "*.html", "*.js", "*.css" })
+        {
+            foreach (string file in Directory.GetFiles(site, pattern))
+            {
+                File.Copy(file, Path.Combine(output, Path.GetFileName(file)), true);
+            }
+        }
+        string assets = Path.Combine(output, "assets");
+        Directory.CreateDirectory(assets);
+        foreach (string file in Directory.GetFiles(Path.Combine(site, "assets")))
+        {
+            File.Copy(file, Path.Combine(assets, Path.GetFileName(file)), true);
+        }
+        Debug.Log("[EtG Web] Site page copied from " + site);
     }
 }

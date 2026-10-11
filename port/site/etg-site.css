@@ -1,0 +1,186 @@
+/* Shared styles of the pages around the WebGL build. 1-bit like the game's pause screen:
+   black, white, and the game's #555 for inactive menu entries. */
+@font-face {
+  font-family: "04b03";
+  src: url("assets/04B_03.ttf") format("truetype");
+  font-display: block;
+}
+
+:root {
+  --bg: #000;
+  --fg: #fff;
+  --dim: #555;
+  --mid: #9a9a9a;
+  --px: 3px; /* one art pixel on screen; pages update it with their scale */
+  --font: "04b03", monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  overflow: hidden;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+  user-select: none;
+}
+
+canvas.pixel,
+img.pixel {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+.etg-icon {
+  display: block;
+  flex: none;
+}
+
+/* The Unity container; UnityLoader puts a 100%x100% canvas in it. */
+.game {
+  position: absolute;
+  background: #000;
+}
+
+/* UnityLoader sets the canvas to 100% inline, but the player rewrites its inline style once it
+   runs; without this the canvas stops following the container (resize, fullscreen) and the game
+   renders into a stale corner. Unity reads clientWidth/Height every frame and resizes to match. */
+.game canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  outline: none;
+}
+
+/* Bottom-center message line. */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translate(-50%, 8px);
+  padding: 8px 16px 6px;
+  background: var(--bg);
+  border: 2px solid var(--fg);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--fg);
+  font-size: 16px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s steps(3), transform 0.15s steps(3);
+  z-index: 100;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* Segmented loading bar: filled with 1-art-pixel gaps, like the game's ammo clips. */
+.segbar {
+  display: flex;
+  gap: var(--px);
+  padding: var(--px);
+  border: var(--px) solid var(--fg);
+}
+
+.segbar i {
+  flex: 1;
+  height: calc(var(--px) * 3);
+  background: var(--dim);
+}
+
+.segbar i.on {
+  background: var(--fg);
+}
+
+/* Little confirm dialog drawn on the game's brick panel. */
+.dialog {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  z-index: 90;
+}
+
+.dialog.open {
+  display: flex;
+}
+
+.dialog-box {
+  max-width: min(92vw, 560px);
+  padding: 24px 28px 20px;
+  background: #000;
+  border: 2px solid var(--fg);
+  box-shadow: 0 0 0 4px #000, 0 0 0 6px var(--fg);
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.dialog-box h2 {
+  margin: 0 0 12px;
+  font-size: 24px;
+  font-weight: normal;
+}
+
+.dialog-box ul {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+  color: var(--mid);
+}
+
+.dialog-box ul li::before {
+  content: "> ";
+  color: var(--dim);
+}
+
+.dialog-box p {
+  margin: 0 0 16px;
+  color: var(--mid);
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 24px;
+  justify-content: flex-end;
+}
+
+.dialog-actions button {
+  font-size: 24px;
+  color: var(--dim);
+}
+
+.dialog-actions button:hover,
+.dialog-actions button:focus-visible {
+  color: var(--fg);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

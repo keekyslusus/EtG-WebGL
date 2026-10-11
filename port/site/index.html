@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Enter the Gungeon</title>
+  <link rel="icon" href="TemplateData/favicon.ico">
+  <link rel="stylesheet" href="etg-site.css">
+  <style>
+    /* The game edge to edge. A title card while loading, then only a small
+       icon toolbar in the top right corner that shows up when the mouse moves. */
+    .game {
+      inset: 0;
+    }
+
+    .card {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: calc(var(--px) * 8);
+      background: #000;
+      z-index: 10;
+      transition: opacity 0.3s steps(5);
+    }
+
+    .card.gone {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .title {
+      text-align: center;
+      line-height: 1;
+    }
+
+    .title .small {
+      display: block;
+      font-size: calc(var(--px) * 8);
+      color: var(--dim);
+      letter-spacing: var(--px);
+      margin-bottom: calc(var(--px) * 3);
+    }
+
+    .title .big {
+      display: block;
+      font-size: calc(var(--px) * 24);
+    }
+
+    .loader {
+      width: calc(var(--px) * 180);
+      font-size: calc(var(--px) * 8);
+      color: var(--dim);
+    }
+
+    .loader .segbar {
+      margin-bottom: calc(var(--px) * 3);
+    }
+
+    .loader .label {
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .actions {
+      display: flex;
+      gap: calc(var(--px) * 6);
+    }
+
+    .btn {
+      display: flex;
+      align-items: center;
+      gap: calc(var(--px) * 3);
+      padding: calc(var(--px) * 3) calc(var(--px) * 5);
+      border: var(--px) solid var(--dim);
+      color: var(--dim);
+      font-size: calc(var(--px) * 8);
+      white-space: nowrap;
+    }
+
+    .btn:not(:disabled):hover,
+    .btn:not(:disabled):focus-visible {
+      border-color: var(--fg);
+      color: var(--fg);
+      outline: none;
+    }
+
+    .btn.primary:not(:disabled) {
+      border-color: var(--fg);
+      background: var(--fg);
+      color: #000;
+    }
+
+    .btn.primary:not(:disabled):hover {
+      background: #000;
+      color: var(--fg);
+    }
+
+    .btn:disabled {
+      color: #333;
+      border-color: #222;
+    }
+
+    .ghost,
+    .blob {
+      position: fixed;
+      bottom: calc(var(--px) * 6);
+    }
+
+    .ghost {
+      right: calc(var(--px) * 10);
+    }
+
+    .blob {
+      left: calc(var(--px) * 10);
+    }
+
+    .tools {
+      position: fixed;
+      top: 10px;
+      right: 10px;
+      display: flex;
+      gap: 6px;
+      z-index: 5;
+      opacity: 0;
+      transition: opacity 0.2s steps(4);
+    }
+
+    .tools.show,
+    .tools:hover,
+    .tools:focus-within {
+      opacity: 1;
+    }
+
+    .tools button {
+      padding: 6px;
+      background: #000;
+      border: 2px solid var(--fg);
+      color: var(--fg);
+    }
+
+    .tools button:hover {
+      background: var(--fg);
+      color: #000;
+    }
+
+    /* In fullscreen the corner belongs to the game's HUD (currency); holding Esc leaves
+       fullscreen and brings the toolbar back. Separate rules: an unknown prefixed selector
+       would drop the whole list. */
+    :root:fullscreen .tools {
+      display: none;
+    }
+
+    :root:-webkit-full-screen .tools {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="game" class="game"></div>
+
+  <div class="tools" id="tools">
+    <button id="tFs" title="Fullscreen" aria-label="Fullscreen" data-icon="fullscreen"></button>
+    <button id="tExport" title="Export save" aria-label="Export save" data-icon="export"></button>
+    <button id="tImport" title="Import save" aria-label="Import save" data-icon="import"></button>
+  </div>
+
+  <div class="card" id="card">
+    <div class="title">
+      <span class="small">ENTER THE</span>
+      <span class="big">GUNGEON</span>
+    </div>
+    <div class="loader">
+      <div class="segbar" id="segs"></div>
+      <div class="label"><span id="phase">Loading</span><span id="pct">0%</span></div>
+    </div>
+    <div class="actions">
+      <button class="btn primary" id="play" disabled><span data-icon="play"></span>Play</button>
+      <button class="btn" id="fs"><span data-icon="fullscreen"></span>Fullscreen</button>
+      <button class="btn" id="export"><span data-icon="export"></span>Export Save</button>
+      <button class="btn" id="import"><span data-icon="import"></span>Import Save</button>
+    </div>
+    <canvas id="blob" class="pixel blob"></canvas>
+    <canvas id="ghost" class="pixel ghost"></canvas>
+  </div>
+
+  <div class="toast" data-toast></div>
+
+  <script src="Build/UnityLoader.js"></script>
+  <script src="etg-site.js"></script>
+  <script>
+    (function () {
+      var card = document.getElementById("card");
+      var tools = document.getElementById("tools");
+      var playBtn = document.getElementById("play");
+      var anims = [];
+      var k = 2;
+
+      function sizeAnims() {
+        anims.forEach(function (a) {
+          a.canvas.style.width = a.canvas.width * k + "px";
+          a.canvas.style.height = a.canvas.height * k + "px";
+        });
+      }
+
+      function layout() {
+        // The card is laid out on a 380x210 art-pixel grid (the button row is ~290 wide).
+        k = Etg.fitScale(380, 210, innerWidth - 32, innerHeight - 32);
+        document.documentElement.style.setProperty("--px", k + "px");
+        card.querySelectorAll("[data-icon]").forEach(function (el) {
+          el.innerHTML = Etg.icon(el.getAttribute("data-icon"), k);
+        });
+        sizeAnims();
+      }
+
+      function anim(id, name) {
+        var canvas = document.getElementById(id);
+        return Etg.spriteAnim(canvas, name).then(function (handle) {
+          anims.push({ canvas: canvas, stop: handle.stop });
+          sizeAnims();
+        });
+      }
+      anim("blob", "blob");
+      anim("ghost", "ghost");
+
+      Etg.fillIcons(tools);
+      layout();
+      addEventListener("resize", layout);
+
+      var segs = document.getElementById("segs");
+      for (var i = 0; i < 40; i++) segs.appendChild(document.createElement("i"));
+
+      function fs() { Etg.toggleFullscreen(); }
+      document.getElementById("fs").onclick = fs;
+      document.getElementById("tFs").onclick = fs;
+      document.getElementById("export").onclick = document.getElementById("tExport").onclick = function () { Etg.doExport(); };
+      document.getElementById("import").onclick = document.getElementById("tImport").onclick = function () { Etg.doImport(); };
+
+      Etg.onFullscreenChange(function () {
+        var on = Etg.isFullscreen();
+        document.getElementById("tFs").innerHTML = Etg.icon(on ? "windowed" : "fullscreen", 2);
+        document.getElementById("fs").lastChild.textContent = on ? "Windowed" : "Fullscreen";
+      });
+
+      var started = false, idle = null;
+      playBtn.onclick = function () {
+        started = true;
+        card.classList.add("gone");
+        // The card fades out; then its animations stop drawing behind the game.
+        setTimeout(function () { anims.forEach(function (a) { a.stop(); }); }, 400);
+        Etg.game.Module.canvas.focus();
+      };
+      addEventListener("mousemove", function () {
+        if (!started) return;
+        tools.classList.add("show");
+        clearTimeout(idle);
+        idle = setTimeout(function () { tools.classList.remove("show"); }, 2000);
+      });
+
+      Etg.startGame(document.getElementById("game"), {
+        progress: function (p, label, bytes) {
+          var on = Math.round(p * segs.children.length);
+          for (var i = 0; i < segs.children.length; i++) segs.children[i].classList.toggle("on", i < on);
+          if (label === "Loading" && bytes.total) {
+            label += " " + Etg.formatMB(bytes.loaded) + " / " + Etg.formatMB(bytes.total);
+          }
+          document.getElementById("phase").textContent = label;
+          document.getElementById("pct").textContent = Math.floor(p * 100) + "%";
+        },
+        ready: function () {
+          playBtn.disabled = false;
+          playBtn.focus();
+        },
+        error: function (msg) {
+          document.getElementById("phase").textContent = msg;
+        },
+      });
+    })();
+  </script>
+</body>
+</html>
