@@ -56,7 +56,11 @@ public static class EtgWebDebug
         {
             Light l = lights[i];
             sb.AppendLine("  light '" + l.name + "' " + l.type + " color=" + l.color + " intensity=" + l.intensity + " range=" + l.range +
-                          " mode=" + l.renderMode + " mask=" + l.cullingMask + " enabled=" + l.isActiveAndEnabled);
+                          " mode=" + l.renderMode + " mask=" + l.cullingMask + " enabled=" + l.isActiveAndEnabled +
+                          " pos=" + l.transform.position + " dir=" + l.transform.forward + " spotAngle=" + l.spotAngle +
+                          " cookie=" + (l.cookie == null ? "null" : l.cookie.name + " " + l.cookie.width + "x" + l.cookie.height + " " + (l.cookie is Texture2D ? ((Texture2D)l.cookie).format.ToString() : l.cookie.GetType().Name)) +
+                          " shadows=" + l.shadows + " baked=" + l.bakingOutput.isBaked + "/" + l.bakingOutput.lightmapBakeType +
+                          "/" + l.bakingOutput.mixedLightingMode);
         }
 
         foreach (Camera c in Camera.allCameras)
@@ -104,6 +108,89 @@ public static class EtgWebDebug
         Debug.Log(sb.ToString());
     }
 
+    private static readonly List<Light> s_hiddenLights = new List<Light>();
+
+    // Unity Light components (EtG's own lights are ShadowSystem / AdditionalBraveLight, not these).
+    [MenuItem("EtG Web/Debug/Toggle Unity Lights")]
+    public static void ToggleUnityLights()
+    {
+        if (s_hiddenLights.Count > 0)
+        {
+            foreach (Light l in s_hiddenLights)
+            {
+                if (l != null)
+                {
+                    l.enabled = true;
+                }
+            }
+            Debug.Log("[EtG Debug] Unity lights shown: " + s_hiddenLights.Count);
+            s_hiddenLights.Clear();
+            return;
+        }
+        foreach (Light l in UnityEngine.Object.FindObjectsOfType<Light>())
+        {
+            if (l.enabled)
+            {
+                l.enabled = false;
+                s_hiddenLights.Add(l);
+            }
+        }
+        Debug.Log("[EtG Debug] Unity lights hidden: " + s_hiddenLights.Count);
+    }
+
+    // A light whose bakingOutput says "baked" is skipped at runtime (its light is expected in
+    // lightmaps, which EtG doesn't have). Test: force every light to realtime.
+    [MenuItem("EtG Web/Debug/Make Unity Lights Realtime")]
+    public static void MakeLightsRealtime()
+    {
+        int n = 0;
+        foreach (Light l in UnityEngine.Object.FindObjectsOfType<Light>())
+        {
+            LightBakingOutput o = l.bakingOutput;
+            o.isBaked = false;
+            o.lightmapBakeType = LightmapBakeType.Realtime;
+            l.bakingOutput = o;
+            n++;
+        }
+        Debug.Log("[EtG Debug] Unity lights forced realtime: " + n);
+    }
+
+    private static Light s_testLight;
+
+    // A bright red point light at the screen centre: does Unity per-pixel lighting work at all?
+    [MenuItem("EtG Web/Debug/Toggle Test Point Light")]
+    public static void ToggleTestPointLight()
+    {
+        if (s_testLight != null)
+        {
+            UnityEngine.Object.Destroy(s_testLight.gameObject);
+            s_testLight = null;
+            Debug.Log("[EtG Debug] Test point light removed");
+            return;
+        }
+        Camera cam = Camera.main;
+        Vector3 centre = cam == null ? Vector3.zero : cam.ViewportToWorldPoint(new Vector3(0.5f, 0.5f, 0f));
+        GameObject go = new GameObject("[EtG Debug] Test Point Light");
+        // EtG sorts sprites by z = y, so put the light a little in front of that plane
+        go.transform.position = new Vector3(centre.x, centre.y, centre.y - 3f);
+        s_testLight = go.AddComponent<Light>();
+        s_testLight.type = LightType.Point;
+        s_testLight.color = Color.red;
+        s_testLight.intensity = 8f;
+        s_testLight.range = 60f; // generous: sprites' z is not exactly their y
+        s_testLight.renderMode = LightRenderMode.ForcePixel;
+        // Reference object with Unity's own built-in shader: if it turns red and EtG sprites don't,
+        // Unity lighting works and the decompiled ForwardAdd passes are the problem.
+        GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        cube.name = "[EtG Debug] Test Cube";
+        cube.transform.SetParent(go.transform, false);
+        cube.transform.localPosition = new Vector3(2f, 0f, 3f);
+        cube.transform.localScale = Vector3.one * 2f;
+        cube.layer = LayerMask.NameToLayer("FG_Critical");
+        cube.GetComponent<Renderer>().material = new Material(Shader.Find("Legacy Shaders/Diffuse"));
+        Debug.Log("[EtG Debug] Test point light at " + go.transform.position + ", reference cube on layer " + LayerMask.LayerToName(cube.layer));
+    }
+
     private static bool s_shadowQuadsHidden;
 
     // Each ShadowSystem draws a quad with Brave/Tinted Multiply (Double) over its light: 0.5 keeps the
@@ -149,7 +236,7 @@ public static class EtgWebDebug
         foreach (Renderer r in hits)
         {
             Material m = r.sharedMaterial;
-            sb.AppendLine("  '" + GetPath(r.transform) + "' layer=" + LayerMask.LayerToName(r.gameObject.layer) + " size=" + r.bounds.size +
+            sb.AppendLine("  '" + GetPath(r.transform) + "' layer=" + LayerMask.LayerToName(r.gameObject.layer) + " center=" + r.bounds.center + " size=" + r.bounds.size +
                           " visible=" + r.isVisible + " shader=" + (m == null || m.shader == null ? "null" : m.shader.name) +
                           " mat=" + (m == null ? "null" : m.name) + " queue=" + (m == null ? 0 : m.renderQueue) +
                           " keywords=" + (m == null ? "" : string.Join(" ", m.shaderKeywords)));

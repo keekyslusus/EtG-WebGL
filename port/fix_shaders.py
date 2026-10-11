@@ -14,6 +14,12 @@ Fixes, all found by importing the decompiled shaders into Unity:
     builds strip those variants, so they become multi_compile.
   * sign() on DXBC comparison masks (true = -1) came out negated: "b - a" of two raw comparisons
     is swapped back. It made every Pixelator light subtract.
+  * Baked occlusion: saturate(dot(1111, unity_OcclusionMaskSelector)) from the LPPV DX11 variants is 1.0
+    on gles3 (the engine leaves the selector at zero there); it zeroed every Unity light.
+  * Built-in tags come back upper-cased ("LIGHTMODE"="FORWARDADD"); Unity does not recognise those LightMode
+    values when compiling from source, so no Unity light ever lit a sprite. Restored to Unity spelling.
+  * Light attenuation textures (_LightTexture0/B0) are read from .x as on D3D11; on GLES Unity stores them
+    in alpha (UNITY_ATTEN_CHANNEL a), so every Unity light was attenuated to zero. Read .w.
   * Single-shader decompiler slips, patched by exact text.
 """
 import re
@@ -42,8 +48,8 @@ META = [
 EXACT_FIXES = [
     # float4 = float4 * float4 + float2: the DXBC operand was v1.xyxy
     ("Brave/Effects/Starnest_Replacement_Cheap",
-     "* float4(0.1666667, 0.05, 0.1666667, 0.05) + inp.texcoord.xy;",
-     "* float4(0.1666667, 0.05, 0.1666667, 0.05) + inp.texcoord.xyxy;"),
+     "* float4(0.16666667, 0.05, 0.16666667, 0.05) + inp.texcoord.xy;",
+     "* float4(0.16666667, 0.05, 0.16666667, 0.05) + inp.texcoord.xyxy;"),
 ]
 
 
@@ -180,8 +186,62 @@ def fix_bool_subtraction(text: str) -> str:
     return "\n".join(lines)
 
 
+OCCLUSION_SELECTOR_RE = re.compile(
+    r"^(\s*)(tmp\d+\.[xyzw]) = saturate\(dot\(tmp\d+, unity_OcclusionMaskSelector\)\);[ \t]*$", re.M)
+
+
+def fix_occlusion_selector(text: str) -> str:
+    # The DX11 variants were compiled with UNITY_LIGHT_PROBE_PROXY_VOLUME, where
+    # UnitySampleBakedOcclusion returns saturate(dot(lppvOcclusionOr1111, unity_OcclusionMaskSelector)).
+    # On gles3 Unity's own code returns 1.0 there and the engine leaves the selector at zero, so
+    # every Unity light (spot/point/directional) came out black. No EtG variant uses a shadowmask.
+    return OCCLUSION_SELECTOR_RE.sub(
+        lambda m: f"{m.group(1)}{m.group(2)} = 1.0; {MARK}baked occlusion: no shadowmask on gles3", text)
+
+
+# Compiled shaders store built-in tags upper-cased ("LIGHTMODE"="FORWARDADD"); USCSandbox writes them
+# back like that. Unity's ShaderLab parser doesn't recognise the upper-case LightMode values, so the
+# ForwardBase/ForwardAdd passes ran as plain passes without light data: no Unity light (spot, point,
+# vertex) ever reached a sprite. Restore the spelling Unity's own sources use.
+TAG_NAMES = {"LIGHTMODE": "LightMode", "QUEUE": "Queue", "IGNOREPROJECTOR": "IgnoreProjector",
+             "SHADOWSUPPORT": "ShadowSupport", "RENDERTYPE": "RenderType", "FORCENOSHADOWCASTING": "ForceNoShadowCasting",
+             "DISABLEBATCHING": "DisableBatching", "CANUSESPRITEATLAS": "CanUseSpriteAtlas", "PREVIEWTYPE": "PreviewType"}
+LIGHTMODES = {"FORWARDBASE": "ForwardBase", "FORWARDADD": "ForwardAdd", "META": "Meta", "SHADOWCASTER": "ShadowCaster",
+              "ALWAYS": "Always", "DEFERRED": "Deferred", "PREPASSBASE": "PrepassBase", "PREPASSFINAL": "PrepassFinal",
+              "VERTEX": "Vertex", "VERTEXLMRGBM": "VertexLMRGBM", "VERTEXLM": "VertexLM", "MOTIONVECTORS": "MotionVectors"}
+TAG_RE = re.compile(r'"([A-Z]+)"="([^"]*)"')
+
+
+def fix_tag_case(text: str) -> str:
+    def repl(m):
+        name, value = m.group(1), m.group(2)
+        if name not in TAG_NAMES:
+            return m.group(0)
+        if name == "LIGHTMODE":
+            value = LIGHTMODES.get(value, value)
+        return f'"{TAG_NAMES[name]}"="{value}"'
+    return TAG_RE.sub(repl, text)
+
+
+ATTEN_SAMPLE_RE = re.compile(r"(tex2D\((?:_LightTexture0|_LightTextureB0|unity_NHxRoughness), [^()]*\))(\.[xyzw]+)?")
+
+
+def fix_atten_channel(text: str) -> str:
+    # Unity's light attenuation lookups use UNITY_ATTEN_CHANNEL: r on D3D11, a on GLES, where these
+    # are Alpha8 textures (r reads 0). The DX11 code reads .x, so every Unity light (point/spot)
+    # was attenuated to zero on gles3 - the ForwardAdd passes ran but added nothing. Read alpha.
+    # (Cookies are read from .w already, so this is a no-op for them; the rewrite is idempotent.)
+    def repl(m):
+        swizzle = m.group(2)
+        return m.group(1) + ("." + "w" * (len(swizzle) - 1) if swizzle else ".wwww")
+    return ATTEN_SAMPLE_RE.sub(repl, text)
+
+
 def fix_shader(text: str) -> str:
+    text = fix_tag_case(text)  # idempotent on its own
+    text = fix_atten_channel(text)  # idempotent on its own
     already_fixed = MARK in text
+    text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
     text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files
     if BOOL_SUB_MARK not in text:
         text = fix_bool_subtraction(text)
