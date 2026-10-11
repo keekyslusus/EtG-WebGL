@@ -7,6 +7,7 @@ namespace EtgWebPatcher;
 /// Rewrites EtG's managed assemblies so they can run under Unity WebGL:
 ///  - every P/Invoke (Wwise, Steam, Galaxy, InControl native, user32...) becomes a managed stub
 ///    returning default values, so nothing tries to call a native library that doesn't exist in wasm;
+///    Wwise calls WebShim.WwiseShim implements are forwarded there instead (sound via Web Audio);
 ///  - System.Threading.Thread usage is redirected to WebShim.ThreadShim (runs bodies synchronously);
 ///  - AssetBundle.LoadFromFile is redirected to WebShim.BundleShim (bundles preloaded at boot), and so
 ///    are instance AssetBundle calls (LoadAsset..., GetAllScenePaths) for the editor's bundle simulation;
@@ -59,6 +60,13 @@ internal static class Program
     private static readonly (string Type, string Method)[] StubbedMethods =
     {
         ("BraveOptionsMenuItem/WindowsResolutionManager", "TrySetDisplay"),
+    };
+
+    // Static methods whose body becomes a call to the WebShim method of the same name and signature.
+    // AkSoundEngine.GetAkGameObjectID: WwiseShim needs the GameObject behind each id for positions.
+    private static readonly (string Type, string Method, string ShimType)[] ShimForwards =
+    {
+        ("AkSoundEngine", "GetAkGameObjectID", "WebShim.WwiseShim"),
     };
 
     // Types whose threads loop forever polling hardware; running them synchronously would hang.
@@ -127,9 +135,18 @@ internal static class Program
                 if (method.IsPInvokeImpl)
                 {
                     string lib = method.PInvokeInfo?.Module.Name ?? "?";
+                    var forward = type.FullName == "AkSoundEnginePINVOKE" ? shim.WwiseMatching(method) : null;
                     if (StubPInvoke(method))
                     {
-                        report.Count("pinvoke stubbed: " + lib);
+                        if (forward != null)
+                        {
+                            EmitForwardBody(module, method, forward);
+                            report.Count("pinvoke forwarded to WwiseShim: " + lib);
+                        }
+                        else
+                        {
+                            report.Count("pinvoke stubbed: " + lib);
+                        }
                     }
                     continue;
                 }
@@ -157,6 +174,16 @@ internal static class Program
             il.Emit(OpCodes.Call, target);
             il.Emit(OpCodes.Ret);
             report.Count($"body redirected: {typeName}.{methodName} -> {targetName}");
+        }
+        foreach (var (typeName, methodName, shimType) in ShimForwards)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                var target = shim.Matching(shimType, method)
+                    ?? throw new InvalidOperationException($"{shimType}.{methodName} with the signature of {method.FullName} not found in WebShim");
+                EmitForwardBody(module, method, target);
+                report.Count($"body forwarded: {typeName}.{methodName} -> {target.DeclaringType.Name}.{target.Name}");
+            }
         }
         foreach (var (typeName, methodName) in StubbedMethods)
         {
@@ -373,6 +400,24 @@ internal static class Program
         return true;
     }
 
+    /// <summary>Replaces the body with a call to a static method taking the same arguments.</summary>
+    private static void EmitForwardBody(ModuleDefinition module, MethodDefinition method, MethodDefinition target)
+    {
+        var body = new MethodBody(method);
+        method.Body = body;
+        var il = body.GetILProcessor();
+        if (method.HasThis)
+        {
+            throw new InvalidOperationException($"forwarding instance method {method.FullName} is not supported");
+        }
+        foreach (var p in method.Parameters)
+        {
+            il.Emit(OpCodes.Ldarg, p);
+        }
+        il.Emit(OpCodes.Call, module.ImportReference(target));
+        il.Emit(OpCodes.Ret);
+    }
+
     /// <summary>Replaces the body with one that zeroes out-params and returns default.</summary>
     private static void EmitDefaultBody(MethodDefinition method)
     {
@@ -581,6 +626,18 @@ internal static class Program
         public MethodDefinition Media(string name, params string[] parameters) => Find("WebShim.MediaShim", name, parameters);
         public MethodDefinition Screen(string name, params string[] parameters) => Find("WebShim.ScreenShim", name, parameters);
         public AssemblyNameDefinition AssemblyName => shim.Assembly.Name;
+
+        /// <summary>WwiseShim's replacement for an AkSoundEnginePINVOKE extern, if it has one.</summary>
+        public MethodDefinition? WwiseMatching(MethodDefinition method) => Matching("WebShim.WwiseShim", method);
+
+        /// <summary>A public static method of typeName with the same name, parameter and return types.</summary>
+        public MethodDefinition? Matching(string typeName, MethodDefinition method)
+        {
+            var type = shim.GetType(typeName) ?? throw new InvalidOperationException($"{typeName} not found in WebShim");
+            return type.Methods.SingleOrDefault(m => m.Name == method.Name && m.IsStatic && m.IsPublic
+                && m.ReturnType.FullName == method.ReturnType.FullName
+                && m.Parameters.Select(p => p.ParameterType.FullName).SequenceEqual(method.Parameters.Select(p => p.ParameterType.FullName)));
+        }
 
         private MethodDefinition Find(string typeName, string name, string[] parameters, int genericArity = 0)
         {

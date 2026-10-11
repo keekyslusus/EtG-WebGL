@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EtG Soundboard</title>
+<style>
+  :root { --bg: #16161a; --fg: #e8e6e3; --muted: #8b8a88; --line: #2c2c33; --accent: #e0a040; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 12px; }
+  section { border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; }
+  input, select, button { font: inherit; background: #222228; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 8px; }
+  button { cursor: pointer; } button:hover { border-color: var(--accent); }
+  input[type=text] { width: min(420px, 100%); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 6px; }
+  #voices { font: 12px/1.5 ui-monospace, monospace; white-space: pre; max-height: 260px; overflow: auto; color: var(--muted); }
+  #meter { height: 8px; background: var(--accent); width: 0; transition: width .05s; border-radius: 4px; }
+  .meterbox { background: #222228; border-radius: 4px; width: min(420px, 100%); }
+  #status { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>EtG Soundboard</h1>
+<p id="status">loading…</p>
+
+<section>
+  <h2>Event</h2>
+  <div class="row">
+    <input id="event" type="text" list="eventlist" placeholder="Play_WPN_Gun_Shot_01" autocomplete="off">
+    <datalist id="eventlist"></datalist>
+    <button id="post">Post</button>
+    <button id="stopall">Stop all</button>
+  </div>
+  <div class="row">
+    <label>x <input id="px" type="number" value="0" step="1" style="width:70px"></label>
+    <label>y <input id="py" type="number" value="0" step="1" style="width:70px"></label>
+    <label>game object <input id="obj" type="number" value="1" style="width:70px"></label>
+  </div>
+  <div class="meterbox"><div id="meter"></div></div>
+</section>
+
+<section>
+  <h2>Switches (on the game object above) and states</h2>
+  <div class="row"><select id="swgroup"></select><select id="swvalue"></select><button id="setsw">Set switch</button></div>
+  <div class="row"><select id="stgroup"></select><select id="stvalue"></select><button id="setst">Set state</button></div>
+</section>
+
+<section>
+  <h2>Game parameters</h2>
+  <div id="rtpcs"></div>
+</section>
+
+<section>
+  <h2>Voices</h2>
+  <div id="voices"></div>
+</section>
+
+<script src="etg-audio.js"></script>
+<script>
+(async function () {
+  const A = window.EtgAudio;
+  A.init('./');
+  const $ = (id) => document.getElementById(id);
+  const json = await (await fetch('audio.json')).json();
+  const names = json.names;
+  const byName = {};
+  for (const id in names) byName[names[id]] = +id;
+
+  // Group/value lists come from the bank's text export (Init.txt / SFX.txt), via names + node data.
+  const txt = await Promise.all(['Init.txt', 'SFX.txt'].map((f) => fetch(f).then((r) => (r.ok ? r.text() : '')).catch(() => '')));
+  const groups = { 'Switch': {}, 'State': {} };
+  for (const t of txt) {
+    let section = null;
+    for (const line of t.split(/\r?\n/)) {
+      const p = line.split('\t');
+      if (p[0]) { section = p[0]; continue; }
+      if ((section === 'Switch' || section === 'State') && p[1]) {
+        (groups[section][p[3]] = groups[section][p[3]] || []).push([p[2], +p[1]]);
+      }
+    }
+  }
+  function fillGroups(sel, valSel, map) {
+    sel.innerHTML = Object.keys(map).sort().map((g) => `<option>${g}</option>`).join('');
+    const fill = () => { valSel.innerHTML = (map[sel.value] || []).map(([n, id]) => `<option value="${id}">${n}</option>`).join(''); };
+    sel.onchange = fill; fill();
+  }
+  fillGroups($('swgroup'), $('swvalue'), groups.Switch);
+  fillGroups($('stgroup'), $('stvalue'), groups.State);
+
+  $('eventlist').innerHTML = Object.keys(json.events).map((id) => names[id]).filter(Boolean).sort().map((n) => `<option value="${n}">`).join('');
+  $('status').textContent = `${Object.keys(json.events).length} events. Click anywhere first: browsers keep audio off until a click/key.`;
+
+  const obj = () => +$('obj').value;
+  $('post').onclick = () => {
+    const name = $('event').value.trim();
+    const id = byName[name] !== undefined ? byName[name] : A.hash(name);
+    const pid = A.postEvent(id, obj(), +$('px').value, +$('py').value, 0);
+    $('status').textContent = `${name} -> playing id ${pid}`;
+  };
+  $('event').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('post').click(); });
+  $('stopall').onclick = () => A.stopAll();
+  $('setsw').onclick = () => A.setSwitch(A.hash($('swgroup').value), +$('swvalue').value, obj());
+  $('setst').onclick = () => A.setState(A.hash($('stgroup').value), +$('stvalue').value);
+  for (const name of ['VOL_MUS', 'VOL_SFX', 'VOL_UI']) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML = `<label style="width:80px">${name}</label><input type="range" min="0" max="100" value="80"><span>80</span>`;
+    const [range, span] = [row.querySelector('input'), row.querySelector('span')];
+    const apply = () => { span.textContent = range.value; A.setRtpc(A.hash(name), +range.value, -1, 0); };
+    range.oninput = apply;
+    $('rtpcs').appendChild(row);
+    setTimeout(apply, 500);
+  }
+  setInterval(() => {
+    $('meter').style.width = Math.min(100, A.level() * 100) + '%';
+    const lines = [];
+    for (const v of A.debug.voices) {
+      lines.push(`${v.constructor.name.padEnd(16)} node ${String(v.id).padEnd(11)} obj ${String(v.obj).padEnd(5)} pid ${v.pid}  ${names[v.event] || v.event}${v.stopped ? '  (stopping)' : ''}`);
+    }
+    $('voices').textContent = lines.join('\n') || '(none)';
+  }, 100);
+})();
+</script>
+</body>
+</html>

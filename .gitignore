@@ -11,3 +11,4 @@
 port/build/
 port/**/bin/
 port/**/obj/
+/port/audio/__pycache__

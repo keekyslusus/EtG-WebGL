@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EtG audiodiff</title>
+</head>
+<body>
+<pre id="log"></pre>
+<!-- Renders audiodiff cases (cases.json) with EtgAudio.render() and POSTs each mix back as a 16-bit
+     WAV. Opened by audiodiff.py in headless Chrome: ?part=j renders the case ids parts.json lists for j. -->
+<script src="etg-audio.js"></script>
+<script>
+(async function () {
+  const q = new URLSearchParams(location.search);
+  const part = q.get('part') || '0';
+  const log = (s) => { document.getElementById('log').textContent += s + '\n'; };
+  const post = (path, body) => fetch(path, { method: 'POST', body });
+  try {
+    const A = window.EtgAudio;
+    A.init('./');
+    const doc = await (await fetch('cases.json')).json();
+    const mine = new Set((await (await fetch('parts.json')).json())[part]);
+    while (!A.ready) await new Promise((r) => setTimeout(r, 50));
+    const reset = [];
+    for (const g of doc.reset.states) reset.push({ t: 0, op: 'setState', args: [g, 0] });
+    for (const [id, v] of doc.reset.rtpcs) reset.push({ t: 0, op: 'setRtpc', args: [id, v, -1, 0] });
+    for (let i = 0; i < doc.cases.length; i++) {
+      const c = doc.cases[i];
+      if (!mine.has(c.id)) continue;
+      try {
+        const [l, r] = await A.render({ duration: c.duration, rate: 48000, seed: c.seed, listener: [0, 0, 0],
+          steps: reset.concat(c.steps) });
+        await post('/result/' + c.id, wav16(l, r, 48000));
+      } catch (e) {
+        await post('/error', c.id + ' ' + c.name + ': ' + (e && e.stack || e));
+      }
+    }
+  } catch (e) {
+    await post('/error', 'page: ' + (e && e.stack || e));
+  }
+  await post('/finished', '');
+  log('done');
+})();
+
+function wav16(l, r, rate) {
+  const n = l.length;
+  const buf = new ArrayBuffer(44 + n * 4);
+  const v = new DataView(buf);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + n * 4, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 2, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 4, true); v.setUint16(32, 4, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, n * 4, true);
+  const s = new Int16Array(buf, 44);
+  for (let i = 0; i < n; i++) {
+    s[2 * i] = Math.max(-32768, Math.min(32767, Math.round(l[i] * 32767)));
+    s[2 * i + 1] = Math.max(-32768, Math.min(32767, Math.round(r[i] * 32767)));
+  }
+  return buf;
+}
+</script>
+</body>
+</html>
