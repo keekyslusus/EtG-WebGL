@@ -217,3 +217,16 @@ index 2108c20..c278aae 100644
                  {
                      _sb.AppendNoIndent("0");
                  }
+diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs b/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
+index f449a41..6efbe0b 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
+@@ -32,7 +32,7 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+ 			// do simplification optimizers last when detection has been finished
+ 			new USILCompareOrderOptimizer(),
+             new USILAddNegativeOptimizer(),
+-            // new USILAndOptimizer(),
++            new USILAndOptimizer(),
+             // needs to be after AndOptimizer
+             new USILObviousUIntFixer(),
+             // //////////////////////////////

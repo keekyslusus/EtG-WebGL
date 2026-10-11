@@ -35,8 +35,9 @@ port/
    в `ripped/`.
 3. Шейдеры: AssetRipper вместо них пишет заглушки (`DummyShaderTextExporter`), поэтому
    склонировать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/src/USCSandbox`, применить
-   `git apply --ignore-whitespace port/patches/uscsandbox-property-refs.patch` (без него теряются ссылки
-   render state на свойства материала: `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]`), собрать в `tools/uscs`
+   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (сохраняет ссылки render state на свойства
+   материала — `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]` — и включает выключенный `USILAndOptimizer`:
+   без него `маска & float` превращается в целочисленный AND с усечённым литералом), собрать в `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` рядом с exe) и запустить
    `bash port/decompile_shaders.sh` — декомпилирует DX11-байткод всех шейдеров игры в `tools/uscs/out`.
 4. **Unity закрыта** → `bash port/apply.sh`

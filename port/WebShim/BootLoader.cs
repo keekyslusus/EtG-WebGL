@@ -24,6 +24,7 @@ namespace WebShim
         private IEnumerator Start()
         {
             Application.runInBackground = true;
+            AmbientProbeShim.Install();
             string root = Application.streamingAssetsPath + "/Assets/";
 
             if (BundleShim.Simulation && Application.isEditor)

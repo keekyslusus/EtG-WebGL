@@ -12,6 +12,8 @@ Fixes, all found by importing the decompiled shaders into Unity:
     declares or initializes it. Declared at the top of the function and zeroed before each loop.
   * Built-in lighting keywords (LIGHTPROBE_SH, VERTEXLIGHT_ON, ...) emitted as shader_feature:
     builds strip those variants, so they become multi_compile.
+  * sign() on DXBC comparison masks (true = -1) came out negated: "b - a" of two raw comparisons
+    is swapped back. It made every Pixelator light subtract.
   * Single-shader decompiler slips, patched by exact text.
 """
 import re
@@ -149,9 +151,40 @@ def fix_builtin_keywords(text: str) -> str:
                   f"{m.group(1)}#pragma multi_compile __ {m.group(2)}", text)
 
 
+ASSIGN_RE = re.compile(r"^(\s*)(tmp\d+)\.([xyzw]+) = (.*);\s*$")
+COMPARISON_RE = re.compile(r"\s(<|>|<=|>=|==|!=)\s")
+BOOL_SUB_RE = re.compile(r"(tmp\d+\.[xyzw]) - (tmp\d+\.[xyzw])")
+BOOL_SUB_MARK = MARK + "bool subtraction"
+
+
+def fix_bool_subtraction(text: str) -> str:
+    # DXBC comparisons yield -1 (all bits set) for true, and sign() compiles to
+    # iadd(-(0 < x), (x < 0)) on those masks. USCSandbox turns comparisons into 1.0/0.0 but keeps
+    # the subtraction order, so "b - a" on two raw comparison results is -sign(x): the light
+    # shaders' final "* sign(_LightIntensity)" made every Pixelator light subtract (black blobs).
+    lines = text.split("\n")
+    raw_bool = set()
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*(fout|v2f) \w+\(", line):
+            raw_bool = set()
+        m = ASSIGN_RE.match(line)
+        if not m:
+            continue
+        indent, reg, comps, expr = m.groups()
+        sub = BOOL_SUB_RE.fullmatch(expr.strip())
+        if sub and sub.group(1) in raw_bool and sub.group(2) in raw_bool:
+            lines[i] = f"{indent}{reg}.{comps} = {sub.group(2)} - {sub.group(1)}; {BOOL_SUB_MARK}"
+        is_bool = len(comps) == 1 and "?" not in expr and COMPARISON_RE.search(expr) is not None
+        for c in comps:
+            (raw_bool.add if is_bool else raw_bool.discard)(f"{reg}.{c}")
+    return "\n".join(lines)
+
+
 def fix_shader(text: str) -> str:
     already_fixed = MARK in text
     text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files
+    if BOOL_SUB_MARK not in text:
+        text = fix_bool_subtraction(text)
     if already_fixed:
         return text
     name = re.match(r'Shader "([^"]+)"', text)
