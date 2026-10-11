@@ -7,6 +7,8 @@
 // The engine script is loaded on the first call; calls made before it is
 // there are queued. Playing IDs are handed out here so PostEvent can return
 // one right away.
+//
+// Native side of WebShim.XInputShim: browser gamepads as XInput controllers.
 mergeInto(LibraryManager.library, {
   EtgSyncFS: function () {
     if (Module.etgSyncTimer) {
@@ -111,5 +113,84 @@ mergeInto(LibraryManager.library, {
 
   EtgAudioUnregister: function (obj) {
     if (Module.etgAudio) Module.etgAudio.call("unregister", [obj]);
+  },
+
+  // Gamepads for WebShim.XInputShim: fills an XINPUT_STATE (16 bytes: uint packet; ushort
+  // buttons; byte LT, RT; short LX, LY, RX, RY) from the index-th connected browser gamepad.
+  // The Gamepad API's "standard" mapping is the Xbox layout; other mappings are read the same
+  // way as a best effort. Returns ERROR_SUCCESS (0) or ERROR_DEVICE_NOT_CONNECTED (1167).
+  EtgGamepadGetState: function (index, ptr) {
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var pad = null;
+    for (var i = 0, n = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].connected) {
+        if (n++ === index) {
+          pad = pads[i];
+          break;
+        }
+      }
+    }
+    HEAPU32[ptr >> 2] = 0;
+    HEAPU32[(ptr + 4) >> 2] = 0;
+    HEAPU32[(ptr + 8) >> 2] = 0;
+    HEAPU32[(ptr + 12) >> 2] = 0;
+    if (!pad) {
+      return 1167;
+    }
+    var b = pad.buttons, a = pad.axes;
+    function down(i) { return b[i] && (b[i].pressed || b[i].value > 0.5); }
+    function value(i) { return b[i] ? b[i].value : 0; }
+    function axis(i, sign) {
+      var v = (a[i] || 0) * sign;
+      return Math.max(-32768, Math.min(32767, Math.round(v * 32767)));
+    }
+    // XINPUT_GAMEPAD_* bits by standard button index: A B X Y LB RB (LT RT) Back Start LS RS Up Down Left Right
+    var bits = [0x1000, 0x2000, 0x4000, 0x8000, 0x100, 0x200, 0, 0, 0x20, 0x10, 0x40, 0x80, 0x1, 0x2, 0x4, 0x8];
+    var buttons = 0;
+    for (var j = 0; j < bits.length; j++) {
+      if (bits[j] && down(j)) buttons |= bits[j];
+    }
+    HEAPU32[ptr >> 2] = Math.floor(pad.timestamp) >>> 0;
+    HEAPU16[(ptr + 4) >> 1] = buttons;
+    HEAPU8[ptr + 6] = Math.round(value(6) * 255);
+    HEAPU8[ptr + 7] = Math.round(value(7) * 255);
+    // The Gamepad API's Y axes point down, XInput's up.
+    HEAP16[(ptr + 8) >> 1] = axis(0, 1);
+    HEAP16[(ptr + 10) >> 1] = axis(1, -1);
+    HEAP16[(ptr + 12) >> 1] = axis(2, 1);
+    HEAP16[(ptr + 14) >> 1] = axis(3, -1);
+    return 0;
+  },
+
+  // Rumble: XInput motors stay on until set to 0; a browser effect has a duration, so each change
+  // starts a long effect and 0/0 stops it.
+  EtgGamepadSetState: function (index, left, right) {
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var pad = null;
+    for (var i = 0, n = 0; i < pads.length; i++) {
+      if (pads[i] && pads[i].connected && n++ === index) {
+        pad = pads[i];
+        break;
+      }
+    }
+    var act = pad && pad.vibrationActuator;
+    if (!act) {
+      return;
+    }
+    var rumble = Module.etgRumble || (Module.etgRumble = {});
+    var key = left.toFixed(2) + "/" + right.toFixed(2);
+    if (rumble[index] === key) {
+      return;
+    }
+    rumble[index] = key;
+    if (left <= 0 && right <= 0) {
+      if (act.reset) act.reset();
+    } else if (act.playEffect) {
+      act.playEffect("dual-rumble", {
+        duration: 5000,
+        strongMagnitude: Math.min(1, left),
+        weakMagnitude: Math.min(1, right)
+      }).catch(function () {});
+    }
   }
 });

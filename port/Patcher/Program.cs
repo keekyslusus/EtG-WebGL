@@ -7,7 +7,8 @@ namespace EtgWebPatcher;
 /// Rewrites EtG's managed assemblies so they can run under Unity WebGL:
 ///  - every P/Invoke (Wwise, Steam, Galaxy, InControl native, user32...) becomes a managed stub
 ///    returning default values, so nothing tries to call a native library that doesn't exist in wasm;
-///    Wwise calls WebShim.WwiseShim implements are forwarded there instead (sound via Web Audio);
+///    Wwise calls WebShim.WwiseShim implements are forwarded there instead (sound via Web Audio),
+///    and XInput (XInputDotNet) goes to WebShim.XInputShim (browser Gamepad API / editor XInput);
 ///  - System.Threading.Thread usage is redirected to WebShim.ThreadShim (runs bodies synchronously);
 ///  - AssetBundle.LoadFromFile is redirected to WebShim.BundleShim (bundles preloaded at boot), and so
 ///    are instance AssetBundle calls (LoadAsset..., GetAllScenePaths) for the editor's bundle simulation;
@@ -67,6 +68,31 @@ internal static class Program
     private static readonly (string Type, string Method, string ShimType)[] ShimForwards =
     {
         ("AkSoundEngine", "GetAkGameObjectID", "WebShim.WwiseShim"),
+    };
+
+    // Classes whose P/Invoke externs are forwarded to the WebShim method of the same name and
+    // signature. Required: every extern of the class must have a match (else the patch fails),
+    // otherwise unmatched externs are stubbed like the rest.
+    private static readonly (string Type, string ShimType, bool Required)[] PInvokeForwards =
+    {
+        ("AkSoundEnginePINVOKE", "WebShim.WwiseShim", false),
+        ("XInputDotNetPure.Imports", "WebShim.XInputShim", true),
+    };
+
+    // Instance methods whose body becomes a call to a static method of the same assembly with the
+    // remaining arguments (this dropped). XInputDeviceManager.GetState dequeues what its worker
+    // thread polled; that thread never runs here (NeverStartThreadsIn), so poll right away.
+    private static readonly (string Type, string Method, string TargetType, string TargetMethod)[] InstanceToStatic =
+    {
+        ("InControl.XInputDeviceManager", "GetState", "XInputDotNetPure.GamePad", "GetState"),
+    };
+
+    // Methods whose UnityEngine.Application.platform reads go to XInputShim.PlatformForXInput:
+    // InControl only enables XInput on Windows.
+    private static readonly HashSet<string> XInputPlatformChecks = new()
+    {
+        "InControl.InControlManager::OnEnable",
+        "InControl.XInputDeviceManager::CheckPlatformSupport",
     };
 
     // Types whose threads loop forever polling hardware; running them synchronously would hang.
@@ -135,13 +161,18 @@ internal static class Program
                 if (method.IsPInvokeImpl)
                 {
                     string lib = method.PInvokeInfo?.Module.Name ?? "?";
-                    var forward = type.FullName == "AkSoundEnginePINVOKE" ? shim.WwiseMatching(method) : null;
+                    var (_, shimType, required) = PInvokeForwards.FirstOrDefault(f => f.Type == type.FullName);
+                    var forward = shimType != null ? shim.Matching(shimType, method) : null;
+                    if (required && forward == null)
+                    {
+                        throw new InvalidOperationException($"{shimType} has no method matching {method.FullName}");
+                    }
                     if (StubPInvoke(method))
                     {
                         if (forward != null)
                         {
                             EmitForwardBody(module, method, forward);
-                            report.Count("pinvoke forwarded to WwiseShim: " + lib);
+                            report.Count($"pinvoke forwarded to {forward.DeclaringType.Name}: {lib}");
                         }
                         else
                         {
@@ -183,6 +214,24 @@ internal static class Program
                     ?? throw new InvalidOperationException($"{shimType}.{methodName} with the signature of {method.FullName} not found in WebShim");
                 EmitForwardBody(module, method, target);
                 report.Count($"body forwarded: {typeName}.{methodName} -> {target.DeclaringType.Name}.{target.Name}");
+            }
+        }
+        foreach (var (typeName, methodName, targetTypeName, targetName) in InstanceToStatic)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody && m.HasThis) ?? [])
+            {
+                var target = module.GetType(targetTypeName)?.Methods.SingleOrDefault(m => m.Name == targetName && m.IsStatic
+                        && m.Parameters.Count == method.Parameters.Count && m.ReturnType.FullName == method.ReturnType.FullName)
+                    ?? throw new InvalidOperationException($"{targetTypeName}.{targetName} matching {method.FullName} not found");
+                method.Body = new MethodBody(method);
+                var il = method.Body.GetILProcessor();
+                foreach (var p in method.Parameters)
+                {
+                    il.Emit(OpCodes.Ldarg, p);
+                }
+                il.Emit(OpCodes.Call, target);
+                il.Emit(OpCodes.Ret);
+                report.Count($"body redirected: {typeName}.{methodName} -> {targetTypeName}.{targetName}");
             }
         }
         foreach (var (typeName, methodName) in StubbedMethods)
@@ -552,7 +601,18 @@ internal static class Program
                     break;
 
                 case "UnityEngine.Application":
-                    replacement = sig == "get_persistentDataPath()" ? shim.File("PersistentDataPath") : null;
+                    replacement = sig switch
+                    {
+                        "get_persistentDataPath()" => shim.File("PersistentDataPath"),
+                        "get_platform()" when XInputPlatformChecks.Contains(where) => shim.XInput("PlatformForXInput"),
+                        _ => null,
+                    };
+                    break;
+
+                case "UnityEngine.Input":
+                    replacement = sig == "GetJoystickNames()" && type.FullName == "InControl.UnityInputDeviceManager"
+                        ? shim.XInput("GetJoystickNames")
+                        : null;
                     break;
 
                 case "UnityEngine.Screen":
@@ -625,10 +685,8 @@ internal static class Program
         public MethodDefinition File(string name, params string[] parameters) => Find("WebShim.FileShim", name, parameters);
         public MethodDefinition Media(string name, params string[] parameters) => Find("WebShim.MediaShim", name, parameters);
         public MethodDefinition Screen(string name, params string[] parameters) => Find("WebShim.ScreenShim", name, parameters);
+        public MethodDefinition XInput(string name, params string[] parameters) => Find("WebShim.XInputShim", name, parameters);
         public AssemblyNameDefinition AssemblyName => shim.Assembly.Name;
-
-        /// <summary>WwiseShim's replacement for an AkSoundEnginePINVOKE extern, if it has one.</summary>
-        public MethodDefinition? WwiseMatching(MethodDefinition method) => Matching("WebShim.WwiseShim", method);
 
         /// <summary>A public static method of typeName with the same name, parameter and return types.</summary>
         public MethodDefinition? Matching(string typeName, MethodDefinition method)

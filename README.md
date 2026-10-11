@@ -18,8 +18,9 @@ Enter the Gungeon/      game files (not in git)
 ripped/ExportedProject/ Unity project from AssetRipper (not in git)
 webbuild/               finished WebGL build (not in git)
 port/
-  WebShim/      runtime shims: threads, bundle preloading, saves in IndexedDB,
+  WebShim/      runtime shims: threads, bundle preloading, saves in IndexedDB, gamepads (XInputShim),
                 stubs for Unity types stripped from WebGL, loading screen
+  site/         the web page around the player (index.html, save export/import; port/site/README.md)
   Patcher/      Mono.Cecil patcher for the game DLLs + `verify` (checks references against the WebGL libraries)
   UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib
   ShaderDiff/   differential test of the decompiled shaders against the game's DX11 bytecode (see below)
