@@ -51,6 +51,85 @@ floor), report — about 2 minutes. Report: `port/build/abtest/report.html` (+ `
   `round`/`ceil` dithering) plus speckle. Not covered: real game frames (cameras, Pixelator, post effects), render
   targets other than ARGB32, shadows, 75 materials that draw nothing in isolation.
 
+### Variant selection (`bash port/variant-selection.sh`)
+
+Checks which decompiled **vertex and pixel branches Unity actually selects**, against the original keyword inventories
+in `tools/uscs/dump/<shader>/variants.json`. Run with Unity closed, after installing the desired shaders into the project.
+The command reads the installed `.shader`/`.mat` assets; it does not run `apply.sh` or edit their originals.
+
+```
+bash port/variant-selection.sh
+python port/variant_selection.py  # same command from PowerShell; bash above means Git Bash, not WSL
+bash port/variant-selection.sh --static-only
+bash port/variant-selection.sh --filter 'Brave/LitCutoutUber$' --out port/build/variant-subset
+bash port/variant-selection.sh --report-only
+python -m unittest discover -s port -p test_variant_selection.py
+```
+
+- Output: `port/build/variant-selection/report.md`, `summary.json`, `issues.json` grouped by shader and reason,
+  `static.jsonl` (material/pass/stage/engine-setup rows), `combinations.jsonl` (every pragma combination),
+  `empirical.jsonl` (original IDs, actual IDs and both stages' macros), `engine-coverage.json`, `stripping.json`,
+  `unchecked.json`; Unity's log is `editor.log`. IDs are **one-based indices into variants.json**.
+- Static checks enumerate every combination of `multi_compile`/`shader_feature`, including shaders without materials.
+  Single-keyword `shader_feature X` includes the disabled option. The parser validates labelled conditions against the
+  dump and recognises unlabelled final `#else` through the variant's CB marker, tracking nested platform directives.
+  It checks per-stage keyword inventories, so a pixel program need not contain vertex-only keywords.
+- Original mutually exclusive choices are reconstructed independently of the installed pragmas. Required choices
+  default to their first dumped option; installed pragma choices default to their first option. These are explicit
+  assumptions. Conflicting requests, missing exact originals and duplicate original keyword sets are reported separately;
+  the tool never calls a nearest-variant guess a match. Unknown material keywords are reported even when drawing matches.
+- `EtgVariantSelection.cs` renders diagnostic copies in batchmode on D3D11, with graphics emulation disabled and a linear
+  float RenderTexture. Each branch defines an ID; a constant vertex varying and the pixel program encode the two IDs
+  and keyword bitsets separately. Program bodies and render state are replaced so clipping, blending, vertex deformation
+  or another pass cannot hide the result. ForwardAdd gets a color-masked base pass and one additional light. The camera's
+  aspect is explicitly 1, so all 64 diagnostic columns cover the quad in the 64×16 target.
+- Setups: dark, directional, point, spot, each cookie light separately, ForceVertex lights, SH probe usage, and an
+  attempted directional shadow setup. An independent reference shader records the engine keywords, rather than inferring
+  them from possibly broken pragmas. `engine-coverage.json` explicitly marks requested macros that did not activate.
+  Temporary shaders and material clones have their own GUIDs in `Assets/Editor/EtgWebBuild/_variants`; the runner deletes
+  its own folder in `finally` and restores ProjectSettings changed by batchmode. A pre-existing temporary folder is an
+  error, never silently removed. The editor harness is copied into the project as a normal port tool.
+  `inputs.json` records hashes of original shaders, materials, metadata, Graphics Settings and variant inventories;
+  the runner verifies they stayed unchanged, and `--report-only` rejects changed inputs or a different material filter.
+- `stripping.json` checks material feature combinations and Always Included shader GUIDs. Empirical rows also record
+  retention risk for the selected feature combination. This is a conservative inventory, **not a player-build trace**:
+  editor-only material usage can overestimate retention; bundle dependencies, variant collections, runtime keywords,
+  platform and engine stripping still require build evidence. A shader with no material and no Always Included entry
+  has no material-based retention evidence, including for its disabled feature variant.
+- Coverage limits: only first-subshader Always/ForwardBase/ForwardAdd color passes are rendered. Unsupported paths and
+  unresolved builtin shaders are named in `unchecked.json`. ShadowCaster/Meta, deferred/legacy paths, UsePass, fallbacks,
+  lower subshaders, fog, lightmaps, VR/instancing, other shadow permutations and real gameplay keyword changes remain
+  outside the empirical run. Static enumeration still checks parsed CGPROGRAMs for those passes.
+
+On the current project (899 materials, 22,282 measured VS/PS selections), every selection matches an exact original, and the pragma model
+agrees with Unity. There is no new shader fix. The static grid has 58 stage combinations without an exact original and
+87 material/setup predictions without one: these predominantly combine `VERTEXLIGHT_ON` with disabled `LIGHTPROBE_SH`.
+In the render, Unity enables SH also in dark/point/vertex setups, and these predictions do not become mismatches.
+Unknown material keywords are ignored by the installed pragmas; they are retained as findings, not removed from
+game assets. Nine feature combinations lack retention evidence: three duplicate shader assets' `EDITOR_VISUALIZATION`
+Meta options (editor baking), and both `ENABLE_WARP` states of three Hidden/Kvant/Tunnel/Kernels passes with no material.
+The directional shadow attempt does not activate `SHADOWS_SCREEN`; that state remains explicitly unverified.
+
+Sensitivity to bug 17 is built in (`sensitivity.json`): reconstruct the exact old column-based groups in memory and
+check point/spot requests for all five affected shaders. To also render that regression without changing USCSandbox or
+original project assets:
+
+```
+bash port/variant-selection.sh --legacy \
+  --filter 'Brave/(BurnableSprite|DisplacerBeast|LitCutoutUber$|LitBlendUber$|LitCutoutUber_ColorEmissive)' \
+  --out port/build/variant-legacy
+```
+
+The five shaders additionally get synthetic material keyword states from the original inventory, exercising choices
+absent from existing materials. Some malformed requests happen to choose the right program; conflicting pragma sets
+remain invalid. The legacy render exposes actual wrong trailing fallback programs (4,106 VS/PS selections).
+All five shaders fail for some spot requests. Point also fails for LitCutoutUber, LitBlendUber and
+LitCutoutUber_ColorEmissive; tested point requests on BurnableSprite and DisplacerBeast happen to match even with the old
+groups. This narrows the initial task's assertion that point and spot must always fail on all five. The static sensitivity
+still detects malformed/conflicting sets for both lights on all five. The normal run keeps the corrected groups and
+checks the same synthetic states. Ten unit regressions cover nested platform directives, wrong fallbacks,
+missing originals, per-stage keywords, pragma defaults/conflicts, and malformed input rejection.
+
 ### Decompiler bugs fixed (`port/patches/uscsandbox-fixes.patch`, `port/fix_shaders.py`)
 
 Each one broke many shaders at once. Found in the game: 1–6; found by the differential test: 7–16; found by the A/B
