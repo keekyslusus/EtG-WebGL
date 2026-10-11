@@ -1,91 +1,95 @@
-# Enter the Gungeon → WebGL
+# EtG-WebGL
 
-Неофициальный браузерный порт Enter the Gungeon (Unity 2017.4, Mono) для личного использования.
-В репозитории только инструменты порта — файлы игры нужно взять из своей купленной копии.
-**Не публиковать сборки и риппнутый проект**: это ассеты и код Dodge Roll.
+Unofficial browser port of Enter the Gungeon (Unity 2017.4, Mono)
+This repository contains only the porting tools - the game files must come from your own purchased copy.
 
-## Что нужно
+## Requirements
 
-- Enter the Gungeon 2.1.9 (Steam) — папка игры
-- [Unity 2017.4.27f1](https://unity.com/releases/editor/archive) + модуль **WebGL Build Support**
+- Enter the Gungeon 2.1.9 (Steam) — the game folder
+- [Unity 2017.4.27f1](https://unity.com/releases/editor/archive) + the **WebGL Build Support** module
 - .NET SDK 9
 - [AssetRipper](https://github.com/AssetRipper/AssetRipper/releases) 2.x
-- Git Bash (для `apply.sh`), Python 3 (для `setstack.py`)
+- Git Bash (for `apply.sh`), Python 3 (for `setstack.py`)
 
-## Структура
+## Layout
 
 ```
-Enter the Gungeon/      файлы игры (не в git)
-ripped/ExportedProject/ Unity-проект от AssetRipper (не в git)
-webbuild/               готовая WebGL-сборка (не в git)
+Enter the Gungeon/      game files (not in git)
+ripped/ExportedProject/ Unity project from AssetRipper (not in git)
+webbuild/               finished WebGL build (not in git)
 port/
-  WebShim/      рантайм-заглушки: потоки, предзагрузка бандлов, сохранения в IndexedDB,
-                стабы вырезанных из WebGL типов Unity, загрузочный экран
-  Patcher/      Mono.Cecil-патчер DLL игры + `verify` (проверка ссылок против WebGL-библиотек)
-  UnityAssets/  то, что копируется в Unity-проект: меню "EtG Web", link.xml, jslib
-  apply.sh      собирает WebShim/Patcher, патчит DLL, ставит всё в проект
-  setstack.py   увеличивает стек у exe (нужно для asm2wasm)
+  WebShim/      runtime shims: threads, bundle preloading, saves in IndexedDB,
+                stubs for Unity types stripped from WebGL, loading screen
+  Patcher/      Mono.Cecil patcher for the game DLLs + `verify` (checks references against the WebGL libraries)
+  UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib
+  apply.sh      builds WebShim/Patcher, patches the DLLs, installs everything into the project
+  setstack.py   increases the stack size of an exe (needed for asm2wasm)
 ```
 
-## Сборка
+## Building
 
-1. Скопировать игру в `Enter the Gungeon/`.
-2. **AssetRipper** (настройки: *Script Export Format* = `Dll Export Without Renaming`,
-   *Shader Export Format* = `Decompilation`) → открыть папку игры → *Export Unity Project*
-   в `ripped/`.
-3. Шейдеры: AssetRipper вместо них пишет заглушки (`DummyShaderTextExporter`), поэтому
-   склонировать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/src/USCSandbox`, применить
-   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (сохраняет ссылки render state на свойства
-   материала — `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]` — и включает выключенный `USILAndOptimizer`:
-   без него `маска & float` превращается в целочисленный AND с усечённым литералом, — и печатает float-литералы без
-   потери точности: формат `0.0#######` превращал `1e-10` из RGB→HSV в `0.0`, и серые пиксели давали NaN; DXBC `log` —
-   это `log2`, а не натуральный `log`, иначе `pow()` даёт не ту степень; свизл вида `.xyxy` у константы не
-   выбрасывается — без этого `_MainTex_TexelSize * float4(...)` брал ширину/высоту, и bloom заливал экран), собрать в `tools/uscs`
-   (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` рядом с exe) и запустить
-   `bash port/decompile_shaders.sh` — декомпилирует DX11-байткод всех шейдеров игры в `tools/uscs/out`.
-4. **Unity закрыта** → `bash port/apply.sh`
-   Патчит DLL, переименовывает `Assembly-CSharp*` → `EtgGame*` (с сохранением GUID),
-   заменяет шейдеры-заглушки декомпилированными, убирает Windows-бандлы и Wwise-банки
-   из StreamingAssets, проверяет ссылки.
-5. **Один раз**: `asm2wasm` из Unity 2017 падает на большой сборке от переполнения стека.
-   Увеличить ему стек (нужны права администратора, оригинал сохраняется как `.orig`):
+1. Copy the game into `Enter the Gungeon/`.
+2. **AssetRipper** (settings: *Script Export Format* = `Dll Export Without Renaming`,
+   *Shader Export Format* = `Decompilation`) -> open the game folder -> *Export Unity Project*
+   to `ripped/`.
+3. Shaders: AssetRipper writes stubs in their place (`DummyShaderTextExporter`), so
+   clone [USCSandbox](https://github.com/nesrak1/USCSandbox) into `tools/src/USCSandbox`, apply
+   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (keeps render state references to material
+   properties — `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]` — and enables the disabled `USILAndOptimizer`:
+   without it `mask & float` turns into an integer AND with a truncated literal; it also prints float literals without
+   losing precision: the `0.0#######` format turned `1e-10` in RGB->HSV into `0.0`, and grey pixels produced NaN; DXBC `log`
+   is `log2`, not the natural `log`, otherwise `pow()` gives the wrong exponent; a swizzle like `.xyxy` on a constant is no
+   longer dropped — without this `_MainTex_TexelSize * float4(...)` picked up width/height and bloom flooded the screen), build it into `tools/uscs`
+   (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` next to the exe) and run
+   `bash port/decompile_shaders.sh` — it decompiles the DX11 bytecode of all game shaders into `tools/uscs/out`.
+4. **With Unity closed** -> `bash port/apply.sh`
+   Patches the DLLs, renames `Assembly-CSharp*` → `EtgGame*` (keeping GUIDs),
+   replaces the stub shaders with the decompiled ones, removes Windows bundles and Wwise banks
+   from StreamingAssets, verifies references.
+5. **Once**: `asm2wasm` from Unity 2017 crashes with a stack overflow on a large assembly.
+   Increase its stack size (requires admin rights, the original is kept as `.orig`):
    ```
-   python port/setstack.py <копия asm2wasm.exe> 1073741824
+   python port/setstack.py <copy of asm2wasm.exe> 1073741824
    ```
-   и подложить копию вместо
+   and put the copy in place of
    `<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/BuildTools/Emscripten_FastComp_Win/binaryen/bin/asm2wasm.exe`.
-6. Открыть `ripped/ExportedProject` в Unity 2017.4.27f1 → меню **EtG Web → Do Everything (1-4)**
-   (boot-сцена, настройки WebGL 2 / wasm / .NET 2.0, бандлы, dev-сборка в `webbuild/`).
-   Дальше при изменениях порта: `apply.sh` → Ctrl+R в Unity → **4. Build WebGL Player**.
-   Если менялись только ассеты в бандлах, хватит **Rebuild Bundles Only → webbuild**. Но шейдеры из
+6. Open `ripped/ExportedProject` in Unity 2017.4.27f1 -> menu **EtG Web -> Do Everything (1-4)**
+   (boot scene, WebGL 2 / wasm / .NET 2.0 settings, bundles, dev build into `webbuild/`).
+   After that, when the port changes: `apply.sh` -> Ctrl+R in Unity -> **4. Build WebGL Player**.
+   If only assets inside bundles changed, **Rebuild Bundles Only -> webbuild** is enough. But shaders from
    *Always Included Shaders* (Graphics Settings: `Brave/PlayerShader`, `LitCutoutUber`, `LitBlendUber`…)
-   лежат в данных плеера, и `Shader.Find` в браузере берёт именно их: после правки шейдеров нужен шаг 4.
-7. Запускать через любой локальный HTTP-сервер из `webbuild/` (с `file://` не работает).
+   live in the player data, and `Shader.Find` in the browser uses exactly those: after editing shaders step 4 is required.
+7. Run it from `webbuild/` through any local HTTP server (it doesn't work from `file://`).
 
-Лог сборки Unity: `%LOCALAPPDATA%\Unity\Editor\Editor.log`.
+Unity build log: `%LOCALAPPDATA%\Unity\Editor\Editor.log`.
 
-## Быстрая проверка в Play Mode
+## Quick testing in Play Mode
 
-WebGL-сборка идёт ~13 минут, а большинство ошибок рантаймовые — их быстрее ловить в редакторе.
-**EtG Web → Play From Boot**: открывает `Boot.unity` и запускает Play Mode с симуляцией бандлов.
-Бандлы из StreamingAssets (собраны под WebGL) не грузятся: `BundleShim` отдаёт ассеты прямо из проекта
-через `AssetDatabase` по их `assetBundleName`. Сцены из бандлов (`tt_foyer`, `Foyer`, `Foyer_Coop`, `tt6`) на время
-Play Mode добавляются в Build Settings и убираются после выхода.
+Most errors are runtime errors - they're faster to catch in the editor.
+**EtG Web -> Play From Boot**: opens `Boot.unity` and starts Play Mode with bundle simulation.
+Bundles from StreamingAssets (built for WebGL) aren't loaded: `BundleShim` serves assets straight from the project
+via `AssetDatabase` by their `assetBundleName`. Scenes from bundles (`tt_foyer`, `Foyer`, `Foyer_Coop`, `tt6`) are
+added to Build Settings for the duration of Play Mode and removed after exiting.
 
-- Флаг **EtG Web → Simulate Bundles In Play Mode** (EditorPrefs, по умолчанию включён) действует и на обычный Play.
-- Патчер перенаправляет все инстансные вызовы `AssetBundle` в игре (`LoadAsset*`, `GetAllScenePaths`) в `BundleShim`;
-  для настоящего бандла вызывается оригинальный метод, поэтому WebGL-сборка работает как раньше.
-- Бандл-заглушка — объект `AssetBundle` без нативной части, и `== null` для него возвращает `true`. Игра от этого только
-  повторно запрашивает бандл у `ResourceManager`, где он уже закэширован.
-- Сейвы Play Mode лежат в `etg/editor-saves`, а не в `LocalLow/Dodge Roll/Enter the Gungeon`. У проекта те же
-  company/product name, что у игры, так что без перенаправления редактор писал бы в настоящий Steam-сейв.
-- Play From Boot включает **Edit → Graphics Emulation → WebGL 2.0**. По умолчанию для WebGL-таргета стоит эмуляция
-  WebGL 1.0, а плеер работает только на WebGL 2. Но рендер всё равно идёт через D3D11, так что графика
-  (шейдеры, render texture) может отличаться от браузера.
+- The **EtG Web -> Simulate Bundles In Play Mode** flag (EditorPrefs, on by default) also applies to regular Play.
+- The patcher redirects all instance `AssetBundle` calls in the game (`LoadAsset*`, `GetAllScenePaths`) to `BundleShim`;
+  for a real bundle the original method is called, so the WebGL build works as before.
+- A stub bundle is an `AssetBundle` object with no native part, and `== null` returns `true` for it. The only effect
+  is that the game requests the bundle again from `ResourceManager`, where it is already cached.
+- Play Mode saves go to `etg/editor-saves`, not `LocalLow/Dodge Roll/Enter the Gungeon`. The project has the same
+  company/product name as the game, so without the redirect the editor would write to the real Steam save.
+- **Open the project via `open-gles30.ps1`** (Unity with `-force-gles30`, `<OpenGL ES 3.0>` in the window title):
+  then shaders are compiled and rendered for GLES3, like in the browser, and the image matches the WebGL build.
+  In normal mode the editor renders through D3D11, and graphics may differ noticeably: the shaders are decompiled
+  from DX11 and adjusted for gles3 (`fix_shaders.py`). Play From Boot additionally enables
+  **Edit -> Graphics Emulation -> WebGL 2.0** (the default is WebGL 1.0, while the player is WebGL 2 only).
+- What Play Mode still won't show: shaders from *Always Included Shaders* in the browser come from the player data
+  (after editing them step 4 is required, not just Rebuild Bundles); the editor compiles shader variants on demand,
+  while the build strips `shader_feature`s not enabled in materials; Mono in the editor vs IL2CPP in the player.
 
-## Ограничения
+## Limitations
 
-- **Нет звука**: Wwise нативный, банки под Windows. План — шим `AkSoundEngine.PostEvent` → `AudioSource`.
-- Только WebGL 2 (шейдеры после декомпиляции не собираются под WebGL 1).
-- Генерация этажей однопоточная — дольше, чем на ПК.
-- Проверка владения игрой (вход через Steam) ещё не сделана.
+- **No sound**: Wwise is native, banks are for Windows. Plan — a shim `AkSoundEngine.PostEvent` → `AudioSource`.
+- WebGL 2 only (the decompiled shaders don't compile for WebGL 1).
+- Floor generation is single-threaded — slower than on PC.
+- Game ownership verification (Steam sign-in) isn't implemented yet.
