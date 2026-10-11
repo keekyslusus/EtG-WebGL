@@ -1,6 +1,8 @@
 """Post-processes USCSandbox output so it compiles for WebGL 2 (gles3) in Unity 2017.4.
 
-Usage: python fix_shaders.py <dir with decompiled .shader files>   (edits files in place)
+Usage: python fix_shaders.py [--d3d11] <dir with decompiled .shader files>   (edits files in place)
+  --d3d11: skip the GLES-only rewrites (attenuation channel, baked occlusion) that are wrong on D3D11;
+           used by port/shaderdiff.sh, which runs the result against the original DX11 bytecode.
 
 Fixes, all found by importing the decompiled shaders into Unity:
   * Light Probe Proxy Volume uniforms: the DX11 variants reference unity_ProbeVolume*, which
@@ -20,6 +22,9 @@ Fixes, all found by importing the decompiled shaders into Unity:
     values when compiling from source, so no Unity light ever lit a sprite. Restored to Unity spelling.
   * Light attenuation textures (_LightTexture0/B0) are read from .x as on D3D11; on GLES Unity stores them
     in alpha (UNITY_ATTEN_CHANNEL a), so every Unity light was attenuated to zero. Read .w.
+  * D3D renders into textures with a flipped projection; screen positions the game derives from the clip position
+    are computed in D3D's clip space on GLES (title screen water was upside down).
+  * ShadowCaster passes: D3D's reversed-Z shadow bias gets the GL variant on GLES.
   * Single-shader decompiler slips, patched by exact text.
 """
 import re
@@ -45,12 +50,9 @@ META = [
 ]
 
 # (shader name, wrong text, right text)
-EXACT_FIXES = [
-    # float4 = float4 * float4 + float2: the DXBC operand was v1.xyxy
-    ("Brave/Effects/Starnest_Replacement_Cheap",
-     "* float4(0.16666667, 0.05, 0.16666667, 0.05) + inp.texcoord.xy;",
-     "* float4(0.16666667, 0.05, 0.16666667, 0.05) + inp.texcoord.xyxy;"),
-]
+# (Starnest_Replacement_Cheap's "+ inp.texcoord.xy" used to be patched here to ".xyxy"; that was wrong too: the
+# DXBC operand was v0.xyzw = texcoord.xy + texcoord1.xy, now decompiled correctly by USCSandbox.)
+EXACT_FIXES = []
 
 
 def declared(block: str, name: str) -> bool:
@@ -159,7 +161,7 @@ def fix_builtin_keywords(text: str) -> str:
 
 ASSIGN_RE = re.compile(r"^(\s*)(tmp\d+)\.([xyzw]+) = (.*);\s*$")
 COMPARISON_RE = re.compile(r"\s(<|>|<=|>=|==|!=)\s")
-BOOL_SUB_RE = re.compile(r"(tmp\d+\.[xyzw]) - (tmp\d+\.[xyzw])")
+BOOL_SUB_RE = re.compile(r"(tmp\d+)\.([xyzw]+) - (tmp\d+)\.([xyzw]+)")
 BOOL_SUB_MARK = MARK + "bool subtraction"
 
 
@@ -168,6 +170,7 @@ def fix_bool_subtraction(text: str) -> str:
     # iadd(-(0 < x), (x < 0)) on those masks. USCSandbox turns comparisons into 1.0/0.0 but keeps
     # the subtraction order, so "b - a" on two raw comparison results is -sign(x): the light
     # shaders' final "* sign(_LightIntensity)" made every Pixelator light subtract (black blobs).
+    # Also per vector ("tmp0.yz = tmp0.yz - tmp1.xy", SimpleCameraMask's minimap border).
     lines = text.split("\n")
     raw_bool = set()
     for i, line in enumerate(lines):
@@ -178,9 +181,12 @@ def fix_bool_subtraction(text: str) -> str:
             continue
         indent, reg, comps, expr = m.groups()
         sub = BOOL_SUB_RE.fullmatch(expr.strip())
-        if sub and sub.group(1) in raw_bool and sub.group(2) in raw_bool:
-            lines[i] = f"{indent}{reg}.{comps} = {sub.group(2)} - {sub.group(1)}; {BOOL_SUB_MARK}"
-        is_bool = len(comps) == 1 and "?" not in expr and COMPARISON_RE.search(expr) is not None
+        if sub:
+            a_reg, a_sw, b_reg, b_sw = sub.groups()
+            if len(a_sw) == len(b_sw) == len(comps) and all(f"{a_reg}.{c}" in raw_bool for c in a_sw) \
+                    and all(f"{b_reg}.{c}" in raw_bool for c in b_sw):
+                lines[i] = f"{indent}{reg}.{comps} = {b_reg}.{b_sw} - {a_reg}.{a_sw}; {BOOL_SUB_MARK}"
+        is_bool = "?" not in expr and COMPARISON_RE.search(expr) is not None
         for c in comps:
             (raw_bool.add if is_bool else raw_bool.discard)(f"{reg}.{c}")
     return "\n".join(lines)
@@ -237,12 +243,87 @@ def fix_atten_channel(text: str) -> str:
     return ATTEN_SAMPLE_RE.sub(repl, text)
 
 
-def fix_shader(text: str) -> str:
+VERT_RE = re.compile(r"^\s*v2f vert\(appdata v\)\s*\{", re.M)
+CLIP_FLIP_MARK = MARK + "D3D clip space"
+
+
+def fix_clip_space_flip(text: str) -> str:
+    # D3D renders into textures with a vertically flipped projection, GL doesn't; the game cameras render into
+    # textures (Pixelator), and the game's own vertex code relies on that: it derives screen positions straight from
+    # the clip position (title screen water: (clip + 1) / 2, its "y > 0.92" cutoff and sky gradient came out upside
+    # down - white water), multiplies by (1, -1) to undo the flip (PartialDesaturationEffect), or has
+    # ComputeGrabScreenPos' D3D -1 baked in. On GLES, compute those in D3D's flipped clip space and flip only what
+    # goes to the rasterizer back. Not when the code uses _ProjectionParams.x (ComputeScreenPos handles the flip).
+    out, last = [], 0
+    for m in VERT_RE.finditer(text):
+        start = m.end()
+        end = body_end(text, start)
+        body = text[start:end]
+        if CLIP_FLIP_MARK in body or "_ProjectionParams" in body:
+            continue
+        lines = body.split("\n")
+        for i, line in enumerate(lines):
+            pm = re.match(r"^(\s*)o\.(position|sv_position) = (tmp\d+)\b.*;\s*$", line)
+            if not pm:
+                continue
+            indent, out_name, reg = pm.groups()
+            if not any(re.search(r"\b" + reg + r"\b", l) for l in lines[i + 1:]):
+                break  # nothing else derived from the clip position
+            lines[i] = (f"{indent}#if !UNITY_UV_STARTS_AT_TOP {CLIP_FLIP_MARK}\n"
+                        f"{indent}{reg}.y = -{reg}.y;\n"
+                        f"{indent}#endif\n"
+                        f"{line}\n"
+                        f"{indent}#if !UNITY_UV_STARTS_AT_TOP\n"
+                        f"{indent}o.{out_name}.y = -o.{out_name}.y;\n"
+                        f"{indent}#endif")
+            break
+        out.append(text[last:start] + "\n".join(lines))
+        last = end
+    out.append(text[last:])
+    return "".join(out)
+
+
+SHADOW_BIAS_RE = re.compile(
+    r"^(\s*)(tmp\d+\.[xyzw]) = unity_LightShadowBias\.x / (tmp\d+)\.w;\n"
+    r"\s*\2 = min\(\2, 0\.0\);\n"
+    r"\s*\2 = max\(\2, -1\.0\);\n", re.M)
+SHADOW_CLAMP_RE = re.compile(r"^(\s*)(tmp\d+\.[xyzw]) = min\((tmp\d+)\.w, \3\.z\);[ \t]*$", re.M)
+SHADOW_MARK = MARK + "reversed-Z shadow bias"
+
+
+def fix_shadow_bias(text: str) -> str:
+    # UnityApplyLinearShadowBias (ShadowCaster passes) compiled for D3D's reversed Z: the bias is clamped to [-1, 0]
+    # and z to min(z, w). With GL's depth range it is saturate(bias / w) and max(z, -w); as decompiled, GL got no
+    # depth bias at all. Only Unity's own shadow maps use it.
+    if SHADOW_MARK in text or "unity_LightShadowBias" not in text:
+        return text
+    text = SHADOW_BIAS_RE.sub(lambda m: (
+        f"{m.group(1)}{m.group(2)} = unity_LightShadowBias.x / {m.group(3)}.w; {SHADOW_MARK}\n"
+        f"{m.group(1)}#if UNITY_REVERSED_Z\n"
+        f"{m.group(1)}{m.group(2)} = min({m.group(2)}, 0.0);\n"
+        f"{m.group(1)}{m.group(2)} = max({m.group(2)}, -1.0);\n"
+        f"{m.group(1)}#else\n"
+        f"{m.group(1)}{m.group(2)} = saturate({m.group(2)});\n"
+        f"{m.group(1)}#endif\n"), text)
+    return SHADOW_CLAMP_RE.sub(lambda m: (
+        f"{m.group(1)}#if UNITY_REVERSED_Z {SHADOW_MARK}\n"
+        f"{m.group(0).rstrip()}\n"
+        f"{m.group(1)}#else\n"
+        f"{m.group(1)}{m.group(2)} = max(-{m.group(3)}.w, {m.group(3)}.z);\n"
+        f"{m.group(1)}#endif"), text)
+
+
+def fix_shader(text: str, gles: bool = True) -> str:
     text = fix_tag_case(text)  # idempotent on its own
-    text = fix_atten_channel(text)  # idempotent on its own
+    if gles:
+        text = fix_atten_channel(text)  # idempotent on its own
     already_fixed = MARK in text
-    text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
+    if gles:
+        text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
     text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files
+    # a no-op on D3D11 (#if !UNITY_UV_STARTS_AT_TOP), so shaderdiff.sh checks it doesn't change the DX11 result
+    text = fix_clip_space_flip(text)  # idempotent on its own
+    text = fix_shadow_bias(text)  # idempotent on its own, a no-op on D3D11 too (#if UNITY_REVERSED_Z)
     if BOOL_SUB_MARK not in text:
         text = fix_bool_subtraction(text)
     if already_fixed:
@@ -257,12 +338,12 @@ def fix_shader(text: str) -> str:
     return "".join(parts)
 
 
-def main(root: str) -> None:
+def main(root: str, gles: bool = True) -> None:
     changed = 0
     files = sorted(Path(root).rglob("*.shader"))
     for f in files:
         before = f.read_text(encoding="utf-8")
-        after = fix_shader(before)
+        after = fix_shader(before, gles)
         if after != before:
             f.write_text(after, encoding="utf-8", newline="\n")
             changed += 1
@@ -270,4 +351,6 @@ def main(root: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    args = sys.argv[1:]
+    d3d11 = "--d3d11" in args
+    main([a for a in args if a != "--d3d11"][0], gles=not d3d11)

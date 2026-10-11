@@ -1,8 +1,135 @@
 diff --git a/USCSandbox/Processor/ShaderProcessor.cs b/USCSandbox/Processor/ShaderProcessor.cs
-index 2108c20..c278aae 100644
+index 2108c20..0013e04 100644
 --- a/USCSandbox/Processor/ShaderProcessor.cs
 +++ b/USCSandbox/Processor/ShaderProcessor.cs
-@@ -605,6 +605,26 @@ namespace USCSandbox.Processor
+@@ -16,9 +16,13 @@ namespace USCSandbox.Processor
+         private GPUPlatform _platformId;
+         private UnityVersion _engVer;
+         private StringBuilderIndented _sb;
++        private VariantDumper? _dumper;
++        private int _subShaderIndex;
++        private int _passIndex;
+ 
+-        public ShaderProcessor(AssetTypeValueField shaderBf, UnityVersion engVer, GPUPlatform platformId)
++        public ShaderProcessor(AssetTypeValueField shaderBf, UnityVersion engVer, GPUPlatform platformId, VariantDumper? dumper = null)
+         {
++            _dumper = dumper;
+             _engVer = engVer;
+             _shaderBf = shaderBf;
+             _platformId = platformId;
+@@ -65,11 +69,6 @@ namespace USCSandbox.Processor
+             lz4Decoder.Dispose();
+ 
+             var blobManager = new BlobManager(decompressedBlob, _engVer);
+-            for (var i = 0; i < blobManager.Entries.Count; i++)
+-            {
+-                var entryBytes = blobManager.GetRawEntry(i);
+-                File.WriteAllBytes($"dbg_entry_{i}.bin", entryBytes);
+-            }
+ 
+             _sb.AppendLine($"Shader \"{name}\" {{");
+             _sb.Indent();
+@@ -204,7 +203,6 @@ namespace USCSandbox.Processor
+                 var index = basket.index;
+ 
+                 var subProg = blobManager.GetShaderSubProgram((int)subProgInfo.BlobIndex);
+-                File.WriteAllBytes($"dbg_entry_data_{subProgInfo.BlobIndex}.bin", subProg.ProgramData);
+ 
+                 ShaderParams param;
+                 if (index != -1)
+@@ -223,6 +221,12 @@ namespace USCSandbox.Processor
+ 
+                 var keywords = subProg.GlobalKeywords.Concat(subProg.LocalKeywords).Order().ToArray();
+ 
++                if (programType is ShaderGpuProgramType.DX11VertexSM40 or ShaderGpuProgramType.DX11PixelSM40)
++                {
++                    _dumper?.Add(_subShaderIndex, _passIndex, passName,
++                        programType == ShaderGpuProgramType.DX11VertexSM40 ? "vs" : "ps", keywords, subProg, param);
++                }
++
+                 if ((!noVertexVariants && basket == lastVertext) || (!noFragmentVariants && basket == lastFragment))
+                 {
+                     structSb.AppendLine();
+@@ -267,11 +271,7 @@ namespace USCSandbox.Processor
+                     cbufferSb.Append(WritePassCBuffer(param, declaredCBufs[string.Join("-", keywords)], cbuffer, depth));
+                 }
+ 
+-                texSb.Append(new string(' ', depth * 4));
+-                texSb.AppendLine($"// Textures for {programType}");
+-
+-                texSb.Append(WritePassTextures(param, declaredCBufs[string.Join("-", keywords)], depth));
+-                
++                var shadowMaps = new HashSet<string>();
+                 switch (programType)
+                 {
+                     case ShaderGpuProgramType.DX11VertexSM40:
+@@ -290,6 +290,7 @@ namespace USCSandbox.Processor
+                         structSb.Append(hlslConverter.WriteStruct());
+                         structSb.AppendLine();
+                         codeSb.Append(hlslConverter.WriteFunction());
++                        shadowMaps.UnionWith(hlslConverter.ShadowMapTextures);
+ 
+                         break;
+                     }
+@@ -320,6 +321,11 @@ namespace USCSandbox.Processor
+                         break;
+                     }
+                 }
++                // after the code: textures read with sample_c have to be declared as shadow maps
++                texSb.Append(new string(' ', depth * 4));
++                texSb.AppendLine($"// Textures for {programType}");
++                texSb.Append(WritePassTextures(param, declaredCBufs[string.Join("-", keywords)], depth, shadowMaps));
++
+                 passSb.Append(structSb.ToString());
+                 passSb.Append(cbufferSb.ToString());
+                 passSb.Append(texSb.ToString());
+@@ -404,7 +410,7 @@ namespace USCSandbox.Processor
+         }
+ 
+         private string WritePassTextures(
+-            ShaderParams shaderParams, HashSet<string> declaredCBufs, int depth)
++            ShaderParams shaderParams, HashSet<string> declaredCBufs, int depth, HashSet<string> shadowMaps)
+         {
+             StringBuilder sb = new StringBuilder();
+             foreach (TextureParameter param in shaderParams.TextureParameters)
+@@ -413,6 +419,14 @@ namespace USCSandbox.Processor
+                 if (!declaredCBufs.Contains(name) && !UnityShaderConstants.BUILTIN_TEXTURE_NAMES.Contains(name))
+                 {
+                     sb.Append(new string(' ', depth * 4));
++                    if (shadowMaps.Contains(name) && param.Dim is 2 or 4)
++                    {
++                        sb.AppendLine(param.Dim == 2
++                            ? $"UNITY_DECLARE_SHADOWMAP({name}); // {param.Index}"
++                            : $"UNITY_DECLARE_TEXCUBE_SHADOWMAP({name}); // {param.Index}");
++                        declaredCBufs.Add(name);
++                        continue;
++                    }
+                     switch (param.Dim)
+                     {
+                         case 2:
+@@ -523,8 +537,10 @@ namespace USCSandbox.Processor
+         private void WriteSubShaders(BlobManager blobManager, AssetTypeValueField parsedForm)
+         {
+             var subshaders = parsedForm["m_SubShaders.Array"];
++            _subShaderIndex = -1;
+             foreach (var subshader in subshaders)
+             {
++                _subShaderIndex++;
+                 _sb.AppendLine("SubShader {");
+                 _sb.Indent();
+                 {
+@@ -559,8 +575,10 @@ namespace USCSandbox.Processor
+         private void WritePasses(BlobManager blobManager, AssetTypeValueField subshader)
+         {
+             var passes = subshader["m_Passes.Array"];
++            _passIndex = -1;
+             foreach (var pass in passes)
+             {
++                _passIndex++;
+                 var usePassName = pass["m_UseName"].AsString;
+                 if (!string.IsNullOrEmpty(usePassName))
+                 {
+@@ -605,6 +623,26 @@ namespace USCSandbox.Processor
              }
          }
  
@@ -29,7 +156,7 @@ index 2108c20..c278aae 100644
          private void WritePassState(AssetTypeValueField state)
          {
              var name = state["m_Name"].AsString;
-@@ -671,72 +691,81 @@ namespace USCSandbox.Processor
+@@ -671,72 +709,81 @@ namespace USCSandbox.Processor
              {
                  _sb.AppendLine("ZClip On");
              }
@@ -156,7 +283,7 @@ index 2108c20..c278aae 100644
  				_sb.Unindent();
  				_sb.AppendLine("}");
  			}
-@@ -801,7 +830,10 @@ namespace USCSandbox.Processor
+@@ -801,7 +848,10 @@ namespace USCSandbox.Processor
              var blendOpAlpha = (BlendOp)(int)rtBlend["blendOpAlpha.val"].AsFloat;
              var colMask = (ColorWriteMask)(int)rtBlend["colMask.val"].AsFloat;
  
@@ -168,7 +295,7 @@ index 2108c20..c278aae 100644
              {
                  _sb.Append("");
                  _sb.AppendNoIndent("Blend ");
-@@ -809,15 +841,15 @@ namespace USCSandbox.Processor
+@@ -809,15 +859,15 @@ namespace USCSandbox.Processor
                  {
                      _sb.AppendNoIndent($"{index} ");
                  }
@@ -188,7 +315,7 @@ index 2108c20..c278aae 100644
              {
                  _sb.Append("");
                  _sb.AppendNoIndent("BlendOp ");
-@@ -825,19 +857,23 @@ namespace USCSandbox.Processor
+@@ -825,19 +875,23 @@ namespace USCSandbox.Processor
                  {
                      _sb.AppendNoIndent($"{index} ");
                  }
@@ -217,11 +344,230 @@ index 2108c20..c278aae 100644
                  {
                      _sb.AppendNoIndent("0");
                  }
+diff --git a/USCSandbox/Processor/UnityShaderConstants.cs b/USCSandbox/Processor/UnityShaderConstants.cs
+index 2a8dabf..68e9111 100644
+--- a/USCSandbox/Processor/UnityShaderConstants.cs
++++ b/USCSandbox/Processor/UnityShaderConstants.cs
+@@ -46,8 +46,9 @@
+             "unity_MatrixV",
+             "unity_MatrixInvV",
+             "glstate_matrix_projection",
+-            "unity_Lightmap_HDR",
+-            "unity_DynamicLightmap_HDR",
++            // not unity_Lightmap_HDR / unity_DynamicLightmap_HDR / _PPLAmbient: in 2017.4 they come from
++            // UnityCG.cginc and Lighting.cginc, which decompiled code doesn't include ("undeclared identifier
++            // 'unity_Lightmap_HDR'" in Legacy Shaders/Transparent/VertexLit)
+ 
+             "_Time",
+             "_SinTime",
+@@ -58,7 +59,6 @@
+             "_WorldSpaceLightPos0",
+             "_ZBufferParams",
+             "_LightPositionRange",
+-            "_PPLAmbient"
+         };
+ 
+         // not in cgincludes but needed
+diff --git a/USCSandbox/Processor/VariantDumper.cs b/USCSandbox/Processor/VariantDumper.cs
+new file mode 100644
+index 0000000..003983e
+--- /dev/null
++++ b/USCSandbox/Processor/VariantDumper.cs
+@@ -0,0 +1,101 @@
++using System.Text;
++using System.Text.Json;
++
++namespace USCSandbox.Processor
++{
++    /// <summary>
++    /// --dump: next to the decompiled text, writes every DX11 sub program as it was in the game (raw DXBC,
++    /// without Unity's header) plus a JSON with its keywords and the parameter layout Unity binds
++    /// (constant buffers with offsets, buffer slots, textures, samplers). Used by port/ShaderDiff to run
++    /// the original bytecode against the recompiled decompilation on the same inputs.
++    /// Layout: dir/variants.json, dir/NNN.dxbc
++    /// </summary>
++    public class VariantDumper
++    {
++        private readonly string _dir;
++        private readonly List<object> _variants = [];
++
++        public VariantDumper(string dir)
++        {
++            _dir = dir;
++            if (Directory.Exists(dir))
++                Directory.Delete(dir, true);
++            Directory.CreateDirectory(dir);
++        }
++
++        public void Add(int subShader, int pass, string passName, string stage, string[] keywords,
++            ShaderSubProgram subProg, ShaderParams param)
++        {
++            var file = $"{_variants.Count:D3}.dxbc";
++            var dxbc = ExtractDxbc(subProg.ProgramData);
++            if (dxbc != null)
++                File.WriteAllBytes(Path.Combine(_dir, file), dxbc);
++
++            var cbuffers = new List<ConstantBuffer>();
++            if (param.BaseConstantBuffer is { CBParams.Count: > 0 })
++                cbuffers.Add(param.BaseConstantBuffer);
++            cbuffers.AddRange(param.ConstantBuffers);
++
++            _variants.Add(new
++            {
++                subShader,
++                pass,
++                passName,
++                stage,
++                keywords,
++                dxbc = dxbc != null ? file : null,
++                cbuffers = cbuffers.Select(cb => new
++                {
++                    name = cb.Name,
++                    size = cb.UsedSize,
++                    @params = cb.CBParams.Select(p => new
++                    {
++                        name = p.ParamName,
++                        type = p.ParamType.ToString(),
++                        rows = p.Rows,
++                        columns = p.Columns,
++                        isMatrix = p.IsMatrix,
++                        arraySize = p.ArraySize,
++                        offset = p.Index,
++                    }),
++                    structs = cb.StructParams.Select(s => new { name = s.Name, offset = s.Index, s.ArraySize, s.Size }),
++                }),
++                cbufferBindings = param.ConstBindings.Select(b => new { name = b.Name, slot = b.Index }),
++                buffers = param.Buffers.Select(b => new { name = b.Name, slot = b.Index }),
++                uavs = param.UAVs.Select(u => new { name = u.Name, slot = u.Index }),
++                textures = param.TextureParameters.Select(t => new
++                {
++                    name = t.Name,
++                    slot = t.Index,
++                    samplerSlot = t.SamplerIndex,
++                    dim = (int)t.Dim,
++                    multiSampled = t.MultiSampled,
++                }),
++                samplers = param.Samplers.Select(s => new { slot = s.BindPoint, state = s.Sampler }),
++            });
++        }
++
++        public void Write()
++        {
++            var json = JsonSerializer.Serialize(_variants, new JsonSerializerOptions { WriteIndented = true });
++            File.WriteAllText(Path.Combine(_dir, "variants.json"), json);
++        }
++
++        // Unity prefixes the DXBC container with its own header (5-6 bytes, +0x20 in newer versions)
++        private static byte[]? ExtractDxbc(byte[] data)
++        {
++            var magic = Encoding.ASCII.GetBytes("DXBC");
++            for (var i = 0; i + 32 <= data.Length; i++)
++            {
++                if (data.AsSpan(i, 4).SequenceEqual(magic))
++                {
++                    var size = BitConverter.ToInt32(data, i + 24);
++                    if (size <= 0 || i + size > data.Length)
++                        return null;
++                    return data.AsSpan(i, size).ToArray();
++                }
++            }
++            return null;
++        }
++    }
++}
+diff --git a/USCSandbox/Program.cs b/USCSandbox/Program.cs
+index b015030..9613a47 100644
+--- a/USCSandbox/Program.cs
++++ b/USCSandbox/Program.cs
+@@ -17,6 +17,8 @@ namespace USCSandbox
+                 Console.WriteLine("  [shader path id (or --all to load all shaders)]");
+                 Console.WriteLine("  --platform <[d3d11, Switch] (or skip this arg for d3d11)>");
+                 Console.WriteLine("  --version <unity version override>");
++                Console.WriteLine("  --dump <dir> (also write <dir>/<shader name>.shader, the original DXBC of every");
++                Console.WriteLine("            DX11 variant and its parameter layout into <dir>/<shader name>/)");
+                 return;
+             }
+ 
+@@ -26,6 +28,7 @@ namespace USCSandbox
+             GPUPlatform platform = GPUPlatform.d3d11;
+             UnityVersion? ver = null;
+             bool allSet = false;
++            string? dumpDir = null;
+ 
+             List<string> argList = [];
+             for (var i = 0; i < args.Length; i++)
+@@ -44,6 +47,9 @@ namespace USCSandbox
+                         case "--all":
+                             allSet = true;
+                             break;
++                        case "--dump":
++                            dumpDir = args[++i];
++                            break;
+                         default:
+                             Console.WriteLine($"Optional argmuent {arg} is invalid.");
+                             return;
+@@ -163,8 +169,14 @@ namespace USCSandbox
+                 }
+ 
+                 var shaderName = shaderBf["m_ParsedForm"]["m_Name"].AsString;
+-                var shaderProcessor = new ShaderProcessor(shaderBf, ver.Value, platform);
++                var dumper = dumpDir != null ? new VariantDumper(Path.Combine(dumpDir, shaderName)) : null;
++                var shaderProcessor = new ShaderProcessor(shaderBf, ver.Value, platform, dumper);
+                 string shaderText = shaderProcessor.Process();
++                if (dumper != null)
++                {
++                    dumper.Write();
++                    File.WriteAllText(Path.Combine(dumpDir!, shaderName + ".shader"), shaderText);
++                }
+ 
+                 Directory.CreateDirectory(Path.Combine(Environment.CurrentDirectory, "out", Path.GetDirectoryName(shaderName)!));
+                 File.WriteAllText($"{Path.Combine(Environment.CurrentDirectory, "out", shaderName)}.shader", shaderText);
 diff --git a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
-index 4123eb1..49674a7 100644
+index 4123eb1..d4bdb4d 100644
 --- a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
 +++ b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILCBufferMetadder.cs
-@@ -170,7 +170,9 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+@@ -121,19 +121,32 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+                 if (cbParams.Count > 1)
+                 {
+                     operand.operandType = USILOperandType.Multiple;
+-                    operand.children = new USILOperand[cbParams.Count];
+ 
++                    // One child per run of swizzle components that read the same parameter, in swizzle order:
++                    // cb0[6].yx over "float a @96; float b @100" is float2(b, a). Going through the parameters
++                    // in declaration order gave float2(a, b) (the ortho sizes of the light renderers swapped).
++                    List<(ConstantBufferParameter param, List<int> mask)> runs = new();
++                    foreach (int operandMask in operand.mask)
++                    {
++                        int address = cbArrIdx * 16 + operandMask * 4;
++                        ConstantBufferParameter? owner = cbParams.FirstOrDefault(p =>
++                            address >= p.Index && address < p.Index + p.Rows * p.Columns * 4 * (p.ArraySize == 0 ? 1 : p.ArraySize));
++                        if (owner == null)
++                            continue;
++                        int component = operandMask - owner.Index / 4 % 4;
++                        if (runs.Count > 0 && runs[^1].param == owner)
++                            runs[^1].mask.Add(component);
++                        else
++                            runs.Add((owner, new List<int> { component }));
++                    }
++
++                    operand.children = new USILOperand[runs.Count];
+                     int i = 0;
+-                    List<string> paramStrs = new List<string>();
+-                    foreach (ConstantBufferParameter param in cbParams)
++                    foreach (var (param, mask) in runs)
+                     {
+                         USILOperand childOperand = new USILOperand();
+                         childOperand.operandType = USILOperandType.ConstantBuffer;
+-
+-                        // apparently switch has column long, whereas directx has row long
+-                        int maxRowOrColumnLength = Math.Max(param.Rows, param.Columns);
+-
+-                        childOperand.mask = MatchMaskToConstantBuffer(operand.mask, param.Index, maxRowOrColumnLength);
++                        childOperand.mask = mask.ToArray();
+                         childOperand.metadataName = param.ParamName;
+                         childOperand.metadataNameAssigned = true;
+                         childOperand.arrayRelative = operand.arrayRelative;
+@@ -170,26 +183,14 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
                      operand.metadataNameAssigned = true;
                      operand.metadataNameWithArray = param.ArraySize > 1;
  
@@ -232,8 +578,193 @@ index 4123eb1..49674a7 100644
                      {
                          operand.displayMask = false;
                      }
+                 }
+             }
+         }
+-
+-        private static int[] MatchMaskToConstantBuffer(int[] mask, int pos, int size)
+-        {
+-            int offset = pos / 4 % 4;
+-            List<int> result = new List<int>();
+-            for (int i = 0; i < mask.Length; i++)
+-            {
+-                if (mask[i] >= offset && mask[i] < offset + size)
+-                {
+-                    result.Add(mask[i] - offset);
+-                }
+-            }
+-            return result.ToArray();
+-        }
+     }
+ }
+diff --git a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILInputOutputMetadder.cs b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILInputOutputMetadder.cs
+index 5df049a..7e23411 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/Metadders/USILInputOutputMetadder.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/Metadders/USILInputOutputMetadder.cs
+@@ -25,7 +25,32 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+ 
+         private static void UseMetadata(USILOperand operand, UShaderProgram shader)
+         {
+-            if (operand.operandType == USILOperandType.InputRegister)
++            if (operand.operandType == USILOperandType.InputRegister && SpansSeveralInputs(operand, shader))
++            {
++                // v0.xyzw over "TEXCOORD0 in v0.xy, TEXCOORD1 in v0.zw" (two interpolators packed in one register)
++                // is float4(inp.texcoord.xy, inp.texcoord1.xy). Naming the register after the semantic of its
++                // first component alone dropped .zw (Starnest_Replacement_Cheap read texcoord.xy twice).
++                List<(USILInputOutput input, List<int> mask)> runs = new();
++                foreach (int component in operand.mask)
++                {
++                    USILInputOutput owner = InputOwning(shader, operand.registerIndex, component)!;
++                    int relative = component - System.Numerics.BitOperations.TrailingZeroCount(owner.mask);
++                    if (runs.Count > 0 && runs[^1].input == owner)
++                        runs[^1].mask.Add(relative);
++                    else
++                        runs.Add((owner, new List<int> { relative }));
++                }
++                operand.operandType = USILOperandType.Multiple;
++                operand.children = runs.Select(run => new USILOperand
++                {
++                    operandType = USILOperandType.InputRegister,
++                    registerIndex = operand.registerIndex,
++                    mask = run.mask.ToArray(),
++                    metadataName = InputName(shader, run.input),
++                    metadataNameAssigned = true,
++                }).ToArray();
++            }
++            else if (operand.operandType == USILOperandType.InputRegister)
+             {
+                 int searchMask = operand.mask.Length != 0 ? 1 << operand.mask[0] : 0;
+                 USILInputOutput input = shader.inputs.First(
+@@ -35,19 +60,7 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+                 // correct mask
+                 operand.mask = MatchMaskToInputOutput(operand.mask, input.mask, true);
+ 
+-                if (shader.shaderFunctionType == UShaderFunctionType.Fragment && input.type == "SV_IsFrontFace")
+-                {
+-                    operand.metadataName = input.name;
+-                }
+-                else
+-                {
+-                    operand.metadataName = shader.shaderFunctionType switch
+-                    {
+-                        UShaderFunctionType.Vertex => $"{USILConstants.VERT_INPUT_NAME}.{input.name}",
+-                        UShaderFunctionType.Fragment => $"{USILConstants.FRAG_INPUT_NAME}.{input.name}",
+-                        _ => $"unk_input.{input.name}",
+-                    };
+-                }
++                operand.metadataName = InputName(shader, input);
+ 
+                 operand.metadataNameAssigned = true;
+             }
+@@ -62,6 +75,12 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+                 List<USILInputOutput> outputs = shader.outputs.Where(
+                     o => o.register == operand.registerIndex && (searchMask & o.mask) != 0
+                 ).ToList();
++                if (outputs.Count > 1)
++                {
++                    // only the last semantic would be written; would need the instruction split in two
++                    Console.Error.WriteLine($"warning: write to o{operand.registerIndex} spans outputs " +
++                                            string.Join(", ", outputs.Select(o => o.name)) + "; only the last is kept");
++                }
+ 
+                 foreach (USILInputOutput output in outputs)
+                 {
+@@ -93,6 +112,27 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Metadders
+             }
+         }
+ 
++        private static USILInputOutput? InputOwning(UShaderProgram shader, int register, int component) =>
++            shader.inputs.FirstOrDefault(i => i.register == register && (i.mask & (1 << component)) != 0);
++
++        private static bool SpansSeveralInputs(USILOperand operand, UShaderProgram shader)
++        {
++            var owners = operand.mask.Select(c => InputOwning(shader, operand.registerIndex, c)).ToList();
++            return owners.All(o => o != null) && owners.Distinct().Count() > 1;
++        }
++
++        private static string InputName(UShaderProgram shader, USILInputOutput input)
++        {
++            if (shader.shaderFunctionType == UShaderFunctionType.Fragment && input.type == "SV_IsFrontFace")
++                return input.name;
++            return shader.shaderFunctionType switch
++            {
++                UShaderFunctionType.Vertex => $"{USILConstants.VERT_INPUT_NAME}.{input.name}",
++                UShaderFunctionType.Fragment => $"{USILConstants.FRAG_INPUT_NAME}.{input.name}",
++                _ => $"unk_input.{input.name}",
++            };
++        }
++
+         private static int[] MatchMaskToInputOutput(int[] mask, int maskTest, bool moveSwizzles)
+         {
+             // Move swizzles (for example, .zw -> .xy) based on first letter
+diff --git a/USCSandbox/UltraShaderConverter/USIL/Optimizers/USILAndOptimizer.cs b/USCSandbox/UltraShaderConverter/USIL/Optimizers/USILAndOptimizer.cs
+index ce16b2a..759a5de 100644
+--- a/USCSandbox/UltraShaderConverter/USIL/Optimizers/USILAndOptimizer.cs
++++ b/USCSandbox/UltraShaderConverter/USIL/Optimizers/USILAndOptimizer.cs
+@@ -27,12 +27,44 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Optimizer
+                         SetRegisterIsComparison(destOperand, true, _comparisonResultRegisters);
+                     }
+                 }
+-                else if (instruction.instructionType == USILInstructionType.And)
++                else if (instruction.instructionType != USILInstructionType.And)
++                {
++                    // any other write ends the register's life as a comparison mask; a stale flag from an earlier
++                    // "lt r2.w" turned DarkPortalShader's later "and r2.w, r2.w(value), r3.x(mask)" around
++                    if (destOperand != null)
++                    {
++                        SetRegisterIsComparison(destOperand, false, _comparisonResultRegisters);
++                    }
++                }
++                else
+                 {
+                     USILOperand leftOperand = instruction.srcOperands[0];
+                     USILOperand rightOperand = instruction.srcOperands[1];
+                     if (rightOperand.operandType == USILOperandType.ImmediateFloat &&
+-                        rightOperand.immValueFloat[0] == 1)
++                        rightOperand.immValueFloat.Any(v => v != 1) &&
++                        rightOperand.immValueFloat.All(IsFloatLiteral))
++                    {
++                        // mask & l(1.0, 0.75): per component "mask ? literal : 0". Checking only the first
++                        // literal turned it into "? 1.0 : 0.0" for both (BraveTilesetWallColorEmissiveCutout's
++                        // 0.75 parallax blend became 1.0)
++                        instruction.instructionType = USILInstructionType.MoveConditional;
++                        instruction.srcOperands = new List<USILOperand>
++                        {
++                            leftOperand,
++                            rightOperand,
++                            new USILOperand()
++                            {
++                                operandType = USILOperandType.ImmediateFloat,
++                                immValueFloat = new float[1] { 0f }
++                            }
++                        };
++
++                        if (destOperand != null)
++                        {
++                            SetRegisterIsComparison(destOperand, false, _comparisonResultRegisters);
++                        }
++                    }
++                    else if (rightOperand.operandType == USILOperandType.ImmediateFloat)
+                     {
+                         instruction.instructionType = USILInstructionType.MoveConditional;
+                         instruction.srcOperands = new List<USILOperand>
+@@ -92,6 +124,14 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL.Optimizer
+             return changes; // any changes made?
+         }
+ 
++        // a value a "mask & literal" select would produce, not a bit mask (0x7fffffff = NaN, 0x80000000 = -0.0,
++        // 0xff = denormal): those ANDs are real integer operations
++        private static bool IsFloatLiteral(float v)
++        {
++            uint bits = BitConverter.SingleToUInt32Bits(v);
++            return bits == 0 || (float.IsNormal(v) && bits != 0x80000000);
++        }
++
+         private static void SetRegisterIsComparison(USILOperand operand, bool isComparison, HashSet<string> _comparisonResultRegisters)
+         {
+             foreach (int maskIdx in operand.mask)
 diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
-index d9ae9e9..4ece2e8 100644
+index d9ae9e9..3a2e080 100644
 --- a/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
 +++ b/USCSandbox/UltraShaderConverter/USIL/USILOperand.cs
 @@ -122,6 +122,19 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
@@ -279,6 +810,21 @@ index d9ae9e9..4ece2e8 100644
                                  }
                              }
                              body += ")";
+@@ -280,7 +293,13 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.USIL
+                     case USILOperandType.ConstantBuffer:
+                     case USILOperandType.Matrix:
+                     {
+-                        if (arrayRelative != null)
++                        if (arrayRelative != null && operandType == USILOperandType.Matrix)
++                        {
++                            // matrix array element: arrayIndex is the column, already in the _mXY swizzle;
++                            // "[0 + 1]._m01_m11_m21_m31" read column 1 of the next matrix (unity_WorldToShadow)
++                            body += $"[{arrayRelative}]";
++                        }
++                        else if (arrayRelative != null)
+                         {
+                             if (arrayIndex == 0)
+                             {
 diff --git a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs b/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
 index f449a41..6efbe0b 100644
 --- a/USCSandbox/UltraShaderConverter/USIL/USILOptimizerApplier.cs
@@ -292,11 +838,134 @@ index f449a41..6efbe0b 100644
              // needs to be after AndOptimizer
              new USILObviousUIntFixer(),
              // //////////////////////////////
+diff --git a/USCSandbox/UltraShaderConverter/UShader/DirectX/DirectXProgramToUSIL.cs b/USCSandbox/UltraShaderConverter/UShader/DirectX/DirectXProgramToUSIL.cs
+index 8ddfbb9..a38da63 100644
+--- a/USCSandbox/UltraShaderConverter/UShader/DirectX/DirectXProgramToUSIL.cs
++++ b/USCSandbox/UltraShaderConverter/UShader/DirectX/DirectXProgramToUSIL.cs
+@@ -1209,44 +1209,44 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Direct
+             SHDRInstructionOperand src = inst.operands[2]; // The components for which to compute sin and cos.
+ 
+             // there is a sincos function in hlsl but we'll just skip that and use individual instructions
++            USILInstruction? sin = dest0.operand != Operand.Null ? SincosPart(USILInstructionType.Sine, dest0, src) : null;
++            USILInstruction? cos = dest1.operand != Operand.Null ? SincosPart(USILInstructionType.Cosine, dest1, src) : null;
+ 
+-            if (dest0.operand != Operand.Null)
++            // sincos reads src once; written out as two statements, the first must not clobber what the second
++            // reads. "sincos r1.x, r2.x, r1.x" came out as "tmp1.x = sin(tmp1.x); tmp2.x = cos(tmp1.x);" (HueShift).
++            if (sin != null && cos != null && Clobbers(sin, cos))
+             {
+-                USILInstruction usilSinInst = new USILInstruction();
+-                USILOperand usilSinDest = new USILOperand();
+-                USILOperand usilSinSrc = new USILOperand();
+-
+-                FillUSILOperand(dest0, usilSinDest, dest0.swizzle, false);
+-                FillUSILOperand(src, usilSinSrc, MapMask(dest0.swizzle, src.swizzle), false);
+-
+-                usilSinInst.instructionType = USILInstructionType.Sine;
+-                usilSinInst.destOperand = usilSinDest;
+-                usilSinInst.srcOperands = new List<USILOperand>
+-                {
+-                    usilSinSrc
+-                };
+-
+-                Instructions.Add(usilSinInst);
++                if (Clobbers(cos, sin))
++                    throw new NotSupportedException("sincos: both destinations overlap the source");
++                (sin, cos) = (cos, sin);
+             }
++            if (sin != null)
++                Instructions.Add(sin);
++            if (cos != null)
++                Instructions.Add(cos);
++        }
+ 
+-            if (dest1.operand != Operand.Null)
++        private USILInstruction SincosPart(USILInstructionType type, SHDRInstructionOperand dest, SHDRInstructionOperand src)
++        {
++            USILOperand usilDest = new USILOperand();
++            USILOperand usilSrc = new USILOperand();
++            FillUSILOperand(dest, usilDest, dest.swizzle, false);
++            FillUSILOperand(src, usilSrc, MapMask(dest.swizzle, src.swizzle), false);
++            return new USILInstruction
+             {
+-                USILInstruction usilCosInst = new USILInstruction();
+-                USILOperand usilCosDest = new USILOperand();
+-                USILOperand usilCosSrc = new USILOperand();
+-
+-                FillUSILOperand(dest1, usilCosDest, dest1.swizzle, false);
+-                FillUSILOperand(src, usilCosSrc, MapMask(dest1.swizzle, src.swizzle), false);
+-
+-                usilCosInst.instructionType = USILInstructionType.Cosine;
+-                usilCosInst.destOperand = usilCosDest;
+-                usilCosInst.srcOperands = new List<USILOperand>
+-                {
+-                    usilCosSrc
+-                };
++                instructionType = type,
++                destOperand = usilDest,
++                srcOperands = new List<USILOperand> { usilSrc }
++            };
++        }
+ 
+-                Instructions.Add(usilCosInst);
+-            }
++        // does writing first's destination change a component that second reads?
++        private static bool Clobbers(USILInstruction first, USILInstruction second)
++        {
++            USILOperand written = first.destOperand!;
++            USILOperand read = second.srcOperands[0];
++            return written.operandType == read.operandType && written.registerIndex == read.registerIndex
++                && written.mask.Intersect(read.mask).Any();
+         }
+ 
+         private void HandleIShl(SHDRInstruction inst)
+@@ -1449,7 +1449,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Direct
+             FillUSILOperand(srcAddress, usilSrcAddress, MapMask(uvMask, srcAddress.swizzle), false);
+             FillUSILOperand(srcResource, usilSrcResource, MapMask(dest.swizzle, srcResource.swizzle), false);
+             FillUSILOperand(srcSampler, usilSrcSampler, mask, false);
+-            FillUSILOperand(srcReferenceValue, usilSrcReferenceValue, mask, false);
++            // a single selected component (r5.z); a fixed .xyzw read the wrong one
++            FillUSILOperand(srcReferenceValue, usilSrcReferenceValue, srcReferenceValue.swizzle, false);
+ 
+             if (inst.opcode == Opcode.sample_c)
+             {
 diff --git a/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs b/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
-index 71ab873..b5db431 100644
+index 71ab873..d644b43 100644
 --- a/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
 +++ b/USCSandbox/UltraShaderConverter/UShader/Function/UShaderFunctionToHLSL.cs
-@@ -341,7 +341,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+@@ -13,6 +13,9 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+         private int _indentLevel;
+ 
+         private delegate void InstHandler(USILInstruction inst);
++
++        /// <summary>Textures read with comparison sampling (sample_c): declared with UNITY_DECLARE_SHADOWMAP.</summary>
++        public HashSet<string> ShadowMapTextures { get; } = new();
+         private Dictionary<USILInstructionType, InstHandler> _instructionHandlers;
+ 
+         public UShaderFunctionToHLSL(UShaderProgram shader, int indentDepth)
+@@ -49,6 +52,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+                 { USILInstructionType.Truncate, new InstHandler(HandleTruncate) },
+                 { USILInstructionType.IntToFloat, new InstHandler(HandleIntToFloat) },
+                 { USILInstructionType.FloatToInt, new InstHandler(HandleFloatToInt) },
++                { USILInstructionType.UIntToFloat, new InstHandler(HandleIntToFloat) },
++                { USILInstructionType.FloatToUInt, new InstHandler(HandleFloatToUInt) },
+                 { USILInstructionType.Sine, new InstHandler(HandleSine) },
+                 { USILInstructionType.Cosine, new InstHandler(HandleCosine) },
+                 { USILInstructionType.ShiftLeft, new InstHandler(HandleShiftLeft) },
+@@ -155,6 +160,12 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+                     {
+                         _instructionHandlers[inst.instructionType](inst);
+                     }
++                    else
++                    {
++                        // used to vanish without a trace
++                        Console.Error.WriteLine($"warning: no HLSL for {inst.instructionType}: {inst}");
++                        AppendLine($"// [USCSandbox] unhandled {inst.instructionType}: {inst}");
++                    }
+                 }
+             }
+             _indentLevel--;
+@@ -341,7 +352,8 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
          private void HandleLogarithm2(USILInstruction inst)
          {
              List<USILOperand> srcOps = inst.srcOperands;
@@ -306,3 +975,128 @@ index 71ab873..b5db431 100644
              string comment = CommentString(inst);
              AppendLine($"{comment}{inst.destOperand} = {value};");
          }
+@@ -410,10 +422,20 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+             AppendLine($"{comment}{inst.destOperand} = {value};");
+         }
+ 
++        private void HandleFloatToUInt(USILInstruction inst)
++        {
++            List<USILOperand> srcOps = inst.srcOperands;
++            string value = $"max(trunc({srcOps[0]}), 0.0)";
++            string comment = CommentString(inst);
++            AppendLine($"{comment}{inst.destOperand} = {value};");
++        }
++
+         private void HandleFloatToInt(USILInstruction inst)
+         {
+             List<USILOperand> srcOps = inst.srcOperands;
+-            string value = $"asint({srcOps[0]})";
++            // integers live in the float temps as their numeric value (itof is floor() above), so ftoi is a
++            // truncation; asint() reinterpreted the bits: 5.0 became 1084227584 (HologramShader's scanlines)
++            string value = $"trunc({srcOps[0]})";
+             string comment = CommentString(inst);
+             AppendLine($"{comment}{inst.destOperand} = {value};");
+         }
+@@ -512,14 +534,36 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+             AppendLine($"{comment}{inst.destOperand} = {value};");
+         }
+ 
++        // The texture a sample reads is the resource operand (t#). USCSandbox used to name it after the sampler
++        // operand (s#), i.e. after whichever texture owns that sampler: Standard's second reflection probe
++        // ("sample_l ..., t3, s0" - unity_SpecCube1 through unity_SpecCube0's sampler) read unity_SpecCube0.
++        private static string TextureName(List<USILOperand> srcOps)
++        {
++            USILOperand resource = srcOps[1];
++            return resource.metadataNameAssigned && !string.IsNullOrEmpty(resource.metadataName)
++                ? resource.metadataName
++                : srcOps[2].ToString();
++        }
++
+         private void HandleSample(USILInstruction inst)
+         {
+             List<USILOperand> srcOps = inst.srcOperands;
+             USILOperand textureOperand = srcOps[2];
++            string texture = TextureName(srcOps);
++            string value;
++            if (inst.instructionType is USILInstructionType.SampleComparison or USILInstructionType.SampleComparisonLODZero)
++            {
++                // sample_c(_lz) compares against srcOps[3]; a plain tex2D returned the depth instead of the 0/1 test
++                ShadowMapTextures.Add(texture);
++                value = textureOperand.operandType == USILOperandType.SamplerCube
++                    ? $"UNITY_SAMPLE_TEXCUBE_SHADOW({texture}, float4({srcOps[0]}, ({srcOps[3]}).x))"
++                    : $"UNITY_SAMPLE_SHADOW({texture}, float3({srcOps[0]}, ({srcOps[3]}).x))";
++                AppendLine($"{CommentString(inst)}{inst.destOperand} = {value};");
++                return;
++            }
+             int samplerTypeIdx = inst.instructionType == USILInstructionType.Sample ? 3 : 4;
+             bool samplerType = srcOps[samplerTypeIdx].immValueInt[0] == 1;
+-            string args = $"{srcOps[2]}, {srcOps[0]}";
+-            string value;
++            string args = $"{texture}, {srcOps[0]}";
+             if (!samplerType)
+             {
+                 value = textureOperand.operandType switch
+@@ -534,7 +578,7 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+             }
+             else
+             {
+-                args = $"{srcOps[2]}, {args}";
++                args = $"{texture}, {srcOps[2]}, {srcOps[0]}";
+                 value = textureOperand.operandType switch
+                 {
+                     USILOperandType.Sampler2D => $"UNITY_SAMPLE_TEX2D_SAMPLER({args})",
+@@ -553,20 +597,21 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+         {
+             List<USILOperand> srcOps = inst.srcOperands;
+             USILOperand textureOperand = srcOps[2];
++            string texture = TextureName(srcOps);
+             bool samplerType = srcOps[4].immValueInt[0] == 1;
+-            string args;
+-            if (srcOps[0].mask.Length == 2) // texture2d
+-            {
+-                args = $"{srcOps[2]}, float4({srcOps[0]}, 0, {srcOps[3]})";
+-            }
+-            else
+-            {
+-                args = $"{srcOps[2]}, float4({srcOps[0]}, {srcOps[3]})";
+-            }
+ 
+             string value;
+             if (!samplerType)
+             {
++                string args;
++                if (srcOps[0].mask.Length == 2) // texture2d
++                {
++                    args = $"{texture}, float4({srcOps[0]}, 0, {srcOps[3]})";
++                }
++                else
++                {
++                    args = $"{texture}, float4({srcOps[0]}, {srcOps[3]})";
++                }
+                 value = textureOperand.operandType switch
+                 {
+                     USILOperandType.Sampler2D => $"tex2Dlod({args})",
+@@ -579,15 +624,16 @@ namespace AssetRipper.Export.Modules.Shaders.UltraShaderConverter.UShader.Functi
+             }
+             else
+             {
+-                args = $"{srcOps[2]}, {args}";
++                // the _SAMPLER_LOD macros keep the level; UNITY_SAMPLE_TEXCUBE_SAMPLER(..., float4(coord, lod))
++                // silently sampled mip 0 (reflection probe roughness). Unity 2017 has no 2D variant.
++                string args = $"{texture}, {srcOps[2]}, {srcOps[0]}, {srcOps[3]}";
+                 value = textureOperand.operandType switch
+                 {
+-                    USILOperandType.Sampler2D => $"UNITY_SAMPLE_TEX2D_SAMPLER({args})",
+-                    USILOperandType.Sampler3D => $"UNITY_SAMPLE_TEX3D_SAMPLER({args})",
+-                    USILOperandType.SamplerCube => $"UNITY_SAMPLE_TEXCUBE_SAMPLER({args})",
+-                    USILOperandType.Sampler2DArray => $"UNITY_SAMPLE_TEX2DARRAY_SAMPLER({args})",
+-                    USILOperandType.SamplerCubeArray => $"UNITY_SAMPLE_TEXCUBEARRAY_SAMPLER({args})",
+-                    _ => $"texND({args})" // unknown real type
++                    USILOperandType.Sampler3D => $"UNITY_SAMPLE_TEX3D_SAMPLER_LOD({args})",
++                    USILOperandType.SamplerCube => $"UNITY_SAMPLE_TEXCUBE_SAMPLER_LOD({args})",
++                    USILOperandType.Sampler2DArray => $"UNITY_SAMPLE_TEX2DARRAY_SAMPLER_LOD({args})",
++                    USILOperandType.SamplerCubeArray => $"UNITY_SAMPLE_TEXCUBEARRAY_SAMPLER_LOD({args})",
++                    _ => $"UNITY_SAMPLE_TEX2D_SAMPLER({texture}, {srcOps[2]}, {srcOps[0]}) /* lod {srcOps[3]} dropped: no macro */"
+                 };
+             }
+             string comment = CommentString(inst);

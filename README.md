@@ -5,7 +5,7 @@ This repository contains only the porting tools - the game files must come from 
 
 ## Requirements
 
-- Enter the Gungeon 2.1.9 (Steam) — the game folder
+- Enter the Gungeon 2.1.9 (Steam) - the game folder
 - [Unity 2017.4.27f1](https://unity.com/releases/editor/archive) + the **WebGL Build Support** module
 - .NET SDK 9
 - [AssetRipper](https://github.com/AssetRipper/AssetRipper/releases) 2.x
@@ -22,7 +22,9 @@ port/
                 stubs for Unity types stripped from WebGL, loading screen
   Patcher/      Mono.Cecil patcher for the game DLLs + `verify` (checks references against the WebGL libraries)
   UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib
+  ShaderDiff/   differential test of the decompiled shaders against the game's DX11 bytecode (see below)
   apply.sh      builds WebShim/Patcher, patches the DLLs, installs everything into the project
+  decompile_shaders.sh / fix_shaders.py / shaderdiff.sh   shader decompilation, gles3 fix-ups, testing
   setstack.py   increases the stack size of an exe (needed for asm2wasm)
 ```
 
@@ -34,14 +36,11 @@ port/
    to `ripped/`.
 3. Shaders: AssetRipper writes stubs in their place (`DummyShaderTextExporter`), so
    clone [USCSandbox](https://github.com/nesrak1/USCSandbox) into `tools/src/USCSandbox`, apply
-   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (keeps render state references to material
-   properties — `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]` — and enables the disabled `USILAndOptimizer`:
-   without it `mask & float` turns into an integer AND with a truncated literal; it also prints float literals without
-   losing precision: the `0.0#######` format turned `1e-10` in RGB->HSV into `0.0`, and grey pixels produced NaN; DXBC `log`
-   is `log2`, not the natural `log`, otherwise `pow()` gives the wrong exponent; a swizzle like `.xyxy` on a constant is no
-   longer dropped — without this `_MainTex_TexelSize * float4(...)` picked up width/height and bloom flooded the screen), build it into `tools/uscs`
+   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (fixes for the decompiler bugs listed under
+   *Shaders* below, plus the `--dump` mode), build it into `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` next to the exe) and run
-   `bash port/decompile_shaders.sh` — it decompiles the DX11 bytecode of all game shaders into `tools/uscs/out`.
+   `bash port/decompile_shaders.sh` — it decompiles the DX11 bytecode of all game shaders into `tools/uscs/out`
+   (and dumps the original bytecode of every variant into `tools/uscs/dump` for `shaderdiff.sh`).
 4. **With Unity closed** -> `bash port/apply.sh`
    Patches the DLLs, renames `Assembly-CSharp*` → `EtgGame*` (keeping GUIDs),
    replaces the stub shaders with the decompiled ones, removes Windows bundles and Wwise banks
@@ -86,6 +85,11 @@ added to Build Settings for the duration of Play Mode and removed after exiting.
 - What Play Mode still won't show: shaders from *Always Included Shaders* in the browser come from the player data
   (after editing them step 4 is required, not just Rebuild Bundles); the editor compiles shader variants on demand,
   while the build strips `shader_feature`s not enabled in materials; Mono in the editor vs IL2CPP in the player.
+
+## Shaders
+
+The game ships its shaders only as DX11 bytecode (DXBC). USCSandbox decompiles them into ShaderLab/CG,
+`fix_shaders.py` adapts the result to gles3, `apply.sh` puts it into the project.
 
 ## Limitations
 
