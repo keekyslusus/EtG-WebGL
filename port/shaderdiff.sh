@@ -18,11 +18,11 @@ CGINC="C:/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Data/CGIncludes"
 [ -d "$DUMP" ] && [ -n "$(ls -A "$DUMP")" ] || { echo "no $DUMP - run port/decompile_shaders.sh first"; exit 1; }
 log=$(dotnet build "$PORT/ShaderDiff" -c Release -o "$PORT/build/ShaderDiff" -v q --nologo 2>&1) || { echo "$log"; exit 1; }
 
-# the decompiled text as decompile_shaders.sh produced it, minus fix_shaders.py's GLES-only rewrites
+# the decompiled text as decompile_shaders.sh produced it, through fix_shaders.py (its GLES rewrites are #if-ed out on D3D11)
 rm -rf "$OUT/src"
 mkdir -p "$OUT/src"
 (cd "$DUMP" && find . -name '*.shader' -exec cp --parents {} "$OUT/src/" \;)
-python -I "$PORT/fix_shaders.py" --d3d11 "$OUT/src"
+python -I "$PORT/fix_shaders.py" "$OUT/src"
 
 win() { cygpath -m "$1"; }
 "$PORT/build/ShaderDiff/ShaderDiff.exe" --dump "$(win "$DUMP")" --src "$(win "$OUT/src")" --cginc "$CGINC" --out "$(win "$OUT")" "$@"

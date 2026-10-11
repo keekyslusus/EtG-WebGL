@@ -1,5 +1,5 @@
 diff --git a/USCSandbox/Processor/ShaderProcessor.cs b/USCSandbox/Processor/ShaderProcessor.cs
-index 2108c20..0013e04 100644
+index 2108c20..7abceab 100644
 --- a/USCSandbox/Processor/ShaderProcessor.cs
 +++ b/USCSandbox/Processor/ShaderProcessor.cs
 @@ -16,9 +16,13 @@ namespace USCSandbox.Processor
@@ -29,7 +29,94 @@ index 2108c20..0013e04 100644
  
              _sb.AppendLine($"Shader \"{name}\" {{");
              _sb.Indent();
-@@ -204,7 +203,6 @@ namespace USCSandbox.Processor
+@@ -133,7 +132,6 @@ namespace USCSandbox.Processor
+ 
+             var allKeywordsCombinations = subPrograms.Select(x => x.GlobalKeywords.Concat(x.LocalKeywords).Order()).ToList();
+             HashSet<string> allUniqueKeywords = allKeywordsCombinations.SelectMany(x => x).ToHashSet();
+-            int leastKeywordsAmount = allKeywordsCombinations.Min(x => x.Count());
+             List<string> mandatoryKeywords = [];
+             
+             List<string> optionalKeywords = new List<string>();
+@@ -151,24 +149,63 @@ namespace USCSandbox.Processor
+                 }
+             }
+ 
+-            if (leastKeywordsAmount > mandatoryKeywords.Count)
++            // [EtG WebGL] Keyword sets: keywords that never occur in the same variant belong to one multi_compile set
++            // (a variant has at most one keyword of each). The old guess took the n-th keyword of each sorted shortest
++            // combination as set n, which mixed sets ("multi_compile POINT PALETTE_OFF SPOT POINT_COOKIE PALETTE_ON"):
++            // Unity then compiled keyword combinations that match none of the #if branches below, and the #else
++            // variant - some other light type - ran instead (LitCutoutUber's point lights ran DIRECTIONAL_COOKIE code).
++            // Never together is not enough where the game's build stripped variants (Standard's ForwardAdd has
++            // SHADOWS_DEPTH only with SPOT): the two must also stand in for each other in at least one variant.
++            var combinationSets = allKeywordsCombinations.Select(x => x.ToHashSet()).ToList();
++            var combinationKeys = combinationSets.Select(c => string.Join(" ", c.Order(StringComparer.Ordinal))).ToHashSet();
++            bool Together(string a, string b) => combinationSets.Any(c => c.Contains(a) && c.Contains(b));
++            bool Interchangeable(string a, string b) => combinationSets.Any(c => c.Contains(a)
++                && combinationKeys.Contains(string.Join(" ", c.Where(k => k != a).Append(b).Order(StringComparer.Ordinal))));
++            var keywordSets = new List<List<string>>();
++            foreach (string keyword in optionalKeywords.Order(StringComparer.Ordinal))
+             {
+-                var leastAmountCombinations = allKeywordsCombinations
+-                    .Where(x => x.Count() == leastKeywordsAmount)
+-                    .Select(x => x.Except(mandatoryKeywords).ToList())
+-                    .ToList();
+-                int multiCompileKeywordIndex = 0;
+-                while (multiCompileKeywordIndex < leastKeywordsAmount - mandatoryKeywords.Count)
++                var set = keywordSets.FirstOrDefault(s => s.All(other => !Together(keyword, other))
++                                                          && s.Any(other => Interchangeable(keyword, other)));
++                if (set is null)
+                 {
+-                    var multiCompileKeywords = leastAmountCombinations
+-                        .Select(x => x[multiCompileKeywordIndex])
+-                        .ToHashSet();
+-                
+-                    defineSb.Append(new string(' ', depth * 4));
+-                    defineSb.AppendLine($"#pragma multi_compile {string.Join(" ", multiCompileKeywords)}");
+-                    optionalKeywords = optionalKeywords.Except(multiCompileKeywords).ToList();
+-                    multiCompileKeywordIndex++;
++                    keywordSets.Add([keyword]);
++                }
++                else
++                {
++                    set.Add(keyword);
++                }
++            }
++            // Unity takes the first keyword of a set when a material enables none of them: keep the order the old code
++            // wrote (column by column over the shortest combinations), so sets it got right come out unchanged.
++            int leastKeywordsAmount = allKeywordsCombinations.Min(x => x.Count());
++            var leastAmountCombinations = allKeywordsCombinations
++                .Where(x => x.Count() == leastKeywordsAmount)
++                .Select(x => x.Except(mandatoryKeywords).ToList())
++                .ToList();
++            var oldOrder = new List<string>();
++            for (int i = 0; i < leastKeywordsAmount - mandatoryKeywords.Count; i++)
++            {
++                oldOrder.AddRange(leastAmountCombinations.Select(x => x[i]).Where(k => !oldOrder.Contains(k)));
++            }
++            foreach (var set in keywordSets)
++            {
++                set.Sort((a, b) =>
++                {
++                    int ia = oldOrder.IndexOf(a), ib = oldOrder.IndexOf(b);
++                    return ia >= 0 && ib >= 0 ? ia.CompareTo(ib) : ia >= 0 ? -1 : ib >= 0 ? 1 : string.CompareOrdinal(a, b);
++                });
++            }
++            optionalKeywords = [];
++            foreach (var set in keywordSets)
++            {
++                bool always = combinationSets.All(c => set.Any(c.Contains));
++                if (set.Count == 1 && !always)
++                {
++                    optionalKeywords.Add(set[0]);
++                    continue;
+                 }
++                defineSb.Append(new string(' ', depth * 4));
++                defineSb.AppendLine($"#pragma multi_compile {(always ? "" : "__ ")}{string.Join(" ", set)}");
+             }
+ 
+             foreach (string keyword in optionalKeywords)
+@@ -204,7 +241,6 @@ namespace USCSandbox.Processor
                  var index = basket.index;
  
                  var subProg = blobManager.GetShaderSubProgram((int)subProgInfo.BlobIndex);
@@ -37,7 +124,7 @@ index 2108c20..0013e04 100644
  
                  ShaderParams param;
                  if (index != -1)
-@@ -223,6 +221,12 @@ namespace USCSandbox.Processor
+@@ -223,6 +259,12 @@ namespace USCSandbox.Processor
  
                  var keywords = subProg.GlobalKeywords.Concat(subProg.LocalKeywords).Order().ToArray();
  
@@ -50,7 +137,7 @@ index 2108c20..0013e04 100644
                  if ((!noVertexVariants && basket == lastVertext) || (!noFragmentVariants && basket == lastFragment))
                  {
                      structSb.AppendLine();
-@@ -267,11 +271,7 @@ namespace USCSandbox.Processor
+@@ -267,11 +309,7 @@ namespace USCSandbox.Processor
                      cbufferSb.Append(WritePassCBuffer(param, declaredCBufs[string.Join("-", keywords)], cbuffer, depth));
                  }
  
@@ -63,7 +150,7 @@ index 2108c20..0013e04 100644
                  switch (programType)
                  {
                      case ShaderGpuProgramType.DX11VertexSM40:
-@@ -290,6 +290,7 @@ namespace USCSandbox.Processor
+@@ -290,6 +328,7 @@ namespace USCSandbox.Processor
                          structSb.Append(hlslConverter.WriteStruct());
                          structSb.AppendLine();
                          codeSb.Append(hlslConverter.WriteFunction());
@@ -71,7 +158,7 @@ index 2108c20..0013e04 100644
  
                          break;
                      }
-@@ -320,6 +321,11 @@ namespace USCSandbox.Processor
+@@ -320,6 +359,11 @@ namespace USCSandbox.Processor
                          break;
                      }
                  }
@@ -83,7 +170,7 @@ index 2108c20..0013e04 100644
                  passSb.Append(structSb.ToString());
                  passSb.Append(cbufferSb.ToString());
                  passSb.Append(texSb.ToString());
-@@ -404,7 +410,7 @@ namespace USCSandbox.Processor
+@@ -404,7 +448,7 @@ namespace USCSandbox.Processor
          }
  
          private string WritePassTextures(
@@ -92,7 +179,7 @@ index 2108c20..0013e04 100644
          {
              StringBuilder sb = new StringBuilder();
              foreach (TextureParameter param in shaderParams.TextureParameters)
-@@ -413,6 +419,14 @@ namespace USCSandbox.Processor
+@@ -413,6 +457,14 @@ namespace USCSandbox.Processor
                  if (!declaredCBufs.Contains(name) && !UnityShaderConstants.BUILTIN_TEXTURE_NAMES.Contains(name))
                  {
                      sb.Append(new string(' ', depth * 4));
@@ -107,7 +194,7 @@ index 2108c20..0013e04 100644
                      switch (param.Dim)
                      {
                          case 2:
-@@ -523,8 +537,10 @@ namespace USCSandbox.Processor
+@@ -523,8 +575,10 @@ namespace USCSandbox.Processor
          private void WriteSubShaders(BlobManager blobManager, AssetTypeValueField parsedForm)
          {
              var subshaders = parsedForm["m_SubShaders.Array"];
@@ -118,7 +205,7 @@ index 2108c20..0013e04 100644
                  _sb.AppendLine("SubShader {");
                  _sb.Indent();
                  {
-@@ -559,8 +575,10 @@ namespace USCSandbox.Processor
+@@ -559,8 +613,10 @@ namespace USCSandbox.Processor
          private void WritePasses(BlobManager blobManager, AssetTypeValueField subshader)
          {
              var passes = subshader["m_Passes.Array"];
@@ -129,7 +216,7 @@ index 2108c20..0013e04 100644
                  var usePassName = pass["m_UseName"].AsString;
                  if (!string.IsNullOrEmpty(usePassName))
                  {
-@@ -605,6 +623,26 @@ namespace USCSandbox.Processor
+@@ -605,6 +661,26 @@ namespace USCSandbox.Processor
              }
          }
  
@@ -156,7 +243,7 @@ index 2108c20..0013e04 100644
          private void WritePassState(AssetTypeValueField state)
          {
              var name = state["m_Name"].AsString;
-@@ -671,72 +709,81 @@ namespace USCSandbox.Processor
+@@ -671,72 +747,81 @@ namespace USCSandbox.Processor
              {
                  _sb.AppendLine("ZClip On");
              }
@@ -283,7 +370,7 @@ index 2108c20..0013e04 100644
  				_sb.Unindent();
  				_sb.AppendLine("}");
  			}
-@@ -801,7 +848,10 @@ namespace USCSandbox.Processor
+@@ -801,7 +886,10 @@ namespace USCSandbox.Processor
              var blendOpAlpha = (BlendOp)(int)rtBlend["blendOpAlpha.val"].AsFloat;
              var colMask = (ColorWriteMask)(int)rtBlend["colMask.val"].AsFloat;
  
@@ -295,7 +382,7 @@ index 2108c20..0013e04 100644
              {
                  _sb.Append("");
                  _sb.AppendNoIndent("Blend ");
-@@ -809,15 +859,15 @@ namespace USCSandbox.Processor
+@@ -809,15 +897,15 @@ namespace USCSandbox.Processor
                  {
                      _sb.AppendNoIndent($"{index} ");
                  }
@@ -315,7 +402,7 @@ index 2108c20..0013e04 100644
              {
                  _sb.Append("");
                  _sb.AppendNoIndent("BlendOp ");
-@@ -825,19 +875,23 @@ namespace USCSandbox.Processor
+@@ -825,19 +913,23 @@ namespace USCSandbox.Processor
                  {
                      _sb.AppendNoIndent($"{index} ");
                  }

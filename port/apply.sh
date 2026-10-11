@@ -59,6 +59,7 @@ if [ -d "$SHADERS_OUT" ]; then
     replaced=0; missing=0
     while IFS= read -r -d '' f; do
         name=$(head -1 "$f" | sed -nE 's/^Shader "(.*)" \{.*/\1/p')
+        [ -n "$name" ] || continue   # not an AssetRipper shader (e.g. our own Editor/EtgWebBuild/AbTestProbe.shader)
         if [ -n "${decompiled[$name]:-}" ]; then
             if ! cmp -s "${decompiled[$name]}" "$f"; then
                 cp -f "${decompiled[$name]}" "$f"; replaced=$((replaced + 1))
@@ -73,7 +74,7 @@ else
 fi
 
 # A few prefabs serialize assembly-qualified type names (PlayMaker variables).
-grep -rlE 'Assembly-(CSharp|UnityScript)' "$PROJECT/Assets" --include=*.prefab --include=*.asset --include=*.unity 2>/dev/null |
+{ grep -rlE 'Assembly-(CSharp|UnityScript)' "$PROJECT/Assets" --include=*.prefab --include=*.asset --include=*.unity 2>/dev/null || true; } |
 while read -r f; do
     echo "   fixing assembly names in ${f#$PROJECT/}"
     sed -i -E 's/Assembly-CSharp-firstpass/EtgGameFirstpass/g; s/Assembly-CSharp([^-A-Za-z0-9_]|$)/EtgGame\1/g; s/Assembly-UnityScript([^-A-Za-z0-9_]|$)/EtgUnityScript\1/g' "$f"

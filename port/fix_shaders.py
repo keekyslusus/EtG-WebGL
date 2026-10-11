@@ -1,8 +1,7 @@
 """Post-processes USCSandbox output so it compiles for WebGL 2 (gles3) in Unity 2017.4.
 
-Usage: python fix_shaders.py [--d3d11] <dir with decompiled .shader files>   (edits files in place)
-  --d3d11: skip the GLES-only rewrites (attenuation channel, baked occlusion) that are wrong on D3D11;
-           used by port/shaderdiff.sh, which runs the result against the original DX11 bytecode.
+Usage: python fix_shaders.py <dir with decompiled .shader files>   (edits files in place)
+The result is meant to be right on both D3D11 and GLES: GLES-specific rewrites sit under #if on the platform.
 
 Fixes, all found by importing the decompiled shaders into Unity:
   * Light Probe Proxy Volume uniforms: the DX11 variants reference unity_ProbeVolume*, which
@@ -17,11 +16,11 @@ Fixes, all found by importing the decompiled shaders into Unity:
   * sign() on DXBC comparison masks (true = -1) came out negated: "b - a" of two raw comparisons
     is swapped back. It made every Pixelator light subtract.
   * Baked occlusion: saturate(dot(1111, unity_OcclusionMaskSelector)) from the LPPV DX11 variants is 1.0
-    on gles3 (the engine leaves the selector at zero there); it zeroed every Unity light.
+    without LPPV (gles3; the engine leaves the selector at zero there); it zeroed every Unity light.
   * Built-in tags come back upper-cased ("LIGHTMODE"="FORWARDADD"); Unity does not recognise those LightMode
     values when compiling from source, so no Unity light ever lit a sprite. Restored to Unity spelling.
   * Light attenuation textures (_LightTexture0/B0) are read from .x as on D3D11; on GLES Unity stores them
-    in alpha (UNITY_ATTEN_CHANNEL a), so every Unity light was attenuated to zero. Read .w.
+    in alpha (UNITY_ATTEN_CHANNEL a), so every Unity light was attenuated to zero. Swizzle by UNITY_ATTEN_CHANNEL.
   * D3D renders into textures with a flipped projection; screen positions the game derives from the clip position
     are computed in D3D's clip space on GLES (title screen water was upside down).
   * ShadowCaster passes: D3D's reversed-Z shadow bias gets the GL variant on GLES.
@@ -194,15 +193,22 @@ def fix_bool_subtraction(text: str) -> str:
 
 OCCLUSION_SELECTOR_RE = re.compile(
     r"^(\s*)(tmp\d+\.[xyzw]) = saturate\(dot\(tmp\d+, unity_OcclusionMaskSelector\)\);[ \t]*$", re.M)
+OCCLUSION_MARK = MARK + "baked occlusion"
 
 
 def fix_occlusion_selector(text: str) -> str:
     # The DX11 variants were compiled with UNITY_LIGHT_PROBE_PROXY_VOLUME, where
     # UnitySampleBakedOcclusion returns saturate(dot(lppvOcclusionOr1111, unity_OcclusionMaskSelector)).
-    # On gles3 Unity's own code returns 1.0 there and the engine leaves the selector at zero, so
+    # Without LPPV (gles3) Unity's own code returns 1.0 there and the engine leaves the selector at zero, so
     # every Unity light (spot/point/directional) came out black. No EtG variant uses a shadowmask.
-    return OCCLUSION_SELECTOR_RE.sub(
-        lambda m: f"{m.group(1)}{m.group(2)} = 1.0; {MARK}baked occlusion: no shadowmask on gles3", text)
+    if OCCLUSION_MARK in text:
+        return text
+    return OCCLUSION_SELECTOR_RE.sub(lambda m: (
+        f"{m.group(1)}#if UNITY_LIGHT_PROBE_PROXY_VOLUME {OCCLUSION_MARK}: no LPPV/selector on gles3\n"
+        f"{m.group(0).rstrip()}\n"
+        f"{m.group(1)}#else\n"
+        f"{m.group(1)}{m.group(2)} = 1.0;\n"
+        f"{m.group(1)}#endif"), text)
 
 
 # Compiled shaders store built-in tags upper-cased ("LIGHTMODE"="FORWARDADD"); USCSandbox writes them
@@ -230,17 +236,35 @@ def fix_tag_case(text: str) -> str:
 
 
 ATTEN_SAMPLE_RE = re.compile(r"(tex2D\((?:_LightTexture0|_LightTextureB0|unity_NHxRoughness), [^()]*\))(\.[xyzw]+)?")
+ATTEN_WRAP = "ETG_ATTEN("
+# fxc doesn't expand a function-like macro right after '.', hence the wrapper around the whole read
+ATTEN_MACROS = (MARK + "light attenuation channel: UNITY_ATTEN_CHANNEL is r on D3D11 (identity), a on GLES\n"
+                "#define ETG_ATTEN_SWIZZLE_r xyzw\n"
+                "#define ETG_ATTEN_SWIZZLE_a wwww\n"
+                "#define ETG_ATTEN__(x, c) (x).ETG_ATTEN_SWIZZLE_##c\n"
+                "#define ETG_ATTEN_(x, c) ETG_ATTEN__(x, c)\n"
+                "#define ETG_ATTEN(x) ETG_ATTEN_(x, UNITY_ATTEN_CHANNEL)\n")
 
 
-def fix_atten_channel(text: str) -> str:
+def fix_atten_channel(program: str) -> str:
     # Unity's light attenuation lookups use UNITY_ATTEN_CHANNEL: r on D3D11, a on GLES, where these
     # are Alpha8 textures (r reads 0). The DX11 code reads .x, so every Unity light (point/spot)
-    # was attenuated to zero on gles3 - the ForwardAdd passes ran but added nothing. Read alpha.
-    # (Cookies are read from .w already, so this is a no-op for them; the rewrite is idempotent.)
+    # was attenuated to zero on gles3 - the ForwardAdd passes ran but added nothing. Read the whole
+    # texel through a swizzle that follows UNITY_ATTEN_CHANNEL: .xyzw (unchanged) on D3D11, .wwww on GLES.
+    # Cookies are read from .w, the same on both. One CGPROGRAM block at a time (the macros go into each).
+    if ATTEN_WRAP in program:
+        return program
+
     def repl(m):
-        swizzle = m.group(2)
-        return m.group(1) + ("." + "w" * (len(swizzle) - 1) if swizzle else ".wwww")
-    return ATTEN_SAMPLE_RE.sub(repl, text)
+        if m.group(2):  # the decompiler never emits one; a swizzle here would need its own macro
+            raise ValueError("swizzled attenuation texture read: " + m.group(0))
+        return ATTEN_WRAP + m.group(1) + ")"
+    fixed = ATTEN_SAMPLE_RE.sub(repl, program)
+    if fixed == program:
+        return program
+    m = re.search(r"((?:^[ \t]*#pragma[^\n]*\n)+)", fixed, re.M)
+    pos = m.end() if m else 0
+    return fixed[:pos] + "\n" + ATTEN_MACROS + fixed[pos:]
 
 
 VERT_RE = re.compile(r"^\s*v2f vert\(appdata v\)\s*\{", re.M)
@@ -313,19 +337,22 @@ def fix_shadow_bias(text: str) -> str:
         f"{m.group(1)}#endif"), text)
 
 
-def fix_shader(text: str, gles: bool = True) -> str:
+def fix_shader(text: str) -> str:
+    # The DX11-vs-GLES rewrites (attenuation channel, baked occlusion, clip space flip, shadow bias) are all under
+    # #if/macros on the platform, no-ops on D3D11: shaderdiff.sh checks they don't change the DX11 result, and the
+    # same files are right in the editor on D3D11 and GLES (port/abtest.sh compares the two).
     text = fix_tag_case(text)  # idempotent on its own
-    if gles:
-        text = fix_atten_channel(text)  # idempotent on its own
     already_fixed = MARK in text
-    if gles:
-        text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
+    text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
     text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files
-    # a no-op on D3D11 (#if !UNITY_UV_STARTS_AT_TOP), so shaderdiff.sh checks it doesn't change the DX11 result
     text = fix_clip_space_flip(text)  # idempotent on its own
-    text = fix_shadow_bias(text)  # idempotent on its own, a no-op on D3D11 too (#if UNITY_REVERSED_Z)
+    text = fix_shadow_bias(text)  # idempotent on its own
     if BOOL_SUB_MARK not in text:
         text = fix_bool_subtraction(text)
+    parts = re.split(r"(CGPROGRAM.*?ENDCG)", text, flags=re.S)
+    for k in range(1, len(parts), 2):
+        parts[k] = fix_atten_channel(parts[k])  # idempotent on its own
+    text = "".join(parts)
     if already_fixed:
         return text
     name = re.match(r'Shader "([^"]+)"', text)
@@ -338,12 +365,12 @@ def fix_shader(text: str, gles: bool = True) -> str:
     return "".join(parts)
 
 
-def main(root: str, gles: bool = True) -> None:
+def main(root: str) -> None:
     changed = 0
     files = sorted(Path(root).rglob("*.shader"))
     for f in files:
         before = f.read_text(encoding="utf-8")
-        after = fix_shader(before, gles)
+        after = fix_shader(before)
         if after != before:
             f.write_text(after, encoding="utf-8", newline="\n")
             changed += 1
@@ -351,6 +378,4 @@ def main(root: str, gles: bool = True) -> None:
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    d3d11 = "--d3d11" in args
-    main([a for a in args if a != "--d3d11"][0], gles=not d3d11)
+    main(sys.argv[1])

@@ -33,9 +33,9 @@ public sealed class Report(List<VariantSummary> results, string outDir, int seed
         sb.AppendLine($"{DateTime.Now:yyyy-MM-dd HH:mm}, seed {seed}, {trials} trials x {Gpu.Samples} samples per variant, " +
                       $"tolerance {Comparer.AbsTol} + {Comparer.RelTol} * |value|, {elapsed.TotalSeconds:F0} s.");
         sb.AppendLine();
-        sb.AppendLine("Original = game DXBC; recompiled = decompiled CG (`fix_shaders.py --d3d11`) compiled with d3dcompiler_47 vs_4_0/ps_4_0, " +
-                      "both on D3D11 WARP with the same random constants, textures and inputs. The GLES-only rewrites of fix_shaders.py " +
-                      "(attenuation channel, baked occlusion) are not applied: they deliberately differ from DX11.");
+        sb.AppendLine("Original = game DXBC; recompiled = decompiled CG (after `fix_shaders.py`) compiled with d3dcompiler_47 vs_4_0/ps_4_0, " +
+                      "both on D3D11 WARP with the same random constants, textures and inputs. The GLES rewrites of fix_shaders.py " +
+                      "are under #if on the platform, so this also checks they are no-ops on D3D11.");
         sb.AppendLine();
         sb.AppendLine("| status | variants | shaders |");
         sb.AppendLine("|---|---|---|");
