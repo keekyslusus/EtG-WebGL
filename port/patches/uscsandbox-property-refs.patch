@@ -1,0 +1,219 @@
+diff --git a/USCSandbox/Processor/ShaderProcessor.cs b/USCSandbox/Processor/ShaderProcessor.cs
+index 2108c20..c278aae 100644
+--- a/USCSandbox/Processor/ShaderProcessor.cs
++++ b/USCSandbox/Processor/ShaderProcessor.cs
+@@ -605,6 +605,26 @@ namespace USCSandbox.Processor
+             }
+         }
+ 
++        // A render state value can name a material property ("Ref [_StencilVal]", "ZTest [_ZTest]");
++        // .val is then only its default, and writing just .val bakes that default in.
++        private static string? PropRef(AssetTypeValueField parent, string key)
++        {
++            var field = parent[$"{key}.name"];
++            // Unity stores "<noninit>" when the value is a plain number
++            return field.IsDummy || string.IsNullOrEmpty(field.AsString) || field.AsString == "<noninit>" ? null : field.AsString;
++        }
++
++        private static string StateValue(AssetTypeValueField parent, string key, object literal)
++        {
++            var prop = PropRef(parent, key);
++            return prop != null ? $"[{prop}]" : Convert.ToString(literal, CultureInfo.InvariantCulture)!;
++        }
++
++        private static bool AnyPropRef(AssetTypeValueField parent, params string[] keys)
++        {
++            return keys.Any(k => PropRef(parent, k) != null);
++        }
++
+         private void WritePassState(AssetTypeValueField state)
+         {
+             var name = state["m_Name"].AsString;
+@@ -671,72 +691,81 @@ namespace USCSandbox.Processor
+             {
+                 _sb.AppendLine("ZClip On");
+             }
+-            if (zTest != ZTest.None && zTest != ZTest.LEqual)
++            if ((zTest != ZTest.None && zTest != ZTest.LEqual) || AnyPropRef(state, "zTest"))
+             {
+-                _sb.AppendLine($"ZTest {zTest}");
++                _sb.AppendLine($"ZTest {StateValue(state, "zTest", zTest)}");
+             }
+-            if (zWrite != ZWrite.On)
++            if (zWrite != ZWrite.On || AnyPropRef(state, "zWrite"))
+             {
+-                _sb.AppendLine($"ZWrite {zWrite}");
++                _sb.AppendLine($"ZWrite {StateValue(state, "zWrite", zWrite)}");
+             }
+-            if (culling != CullMode.Back)
++            if (culling != CullMode.Back || AnyPropRef(state, "culling"))
+             {
+-                _sb.AppendLine($"Cull {culling}");
++                _sb.AppendLine($"Cull {StateValue(state, "culling", culling)}");
+             }
+-            if (offsetFactor != 0f || offsetUnits != 0f)
++            if (offsetFactor != 0f || offsetUnits != 0f || AnyPropRef(state, "offsetFactor", "offsetUnits"))
+             {
+-                _sb.AppendLine($"Offset {offsetFactor}, {offsetUnits}");
++                _sb.AppendLine($"Offset {StateValue(state, "offsetFactor", offsetFactor)}, {StateValue(state, "offsetUnits", offsetUnits)}");
+             }
+-            
++
++            string[] stencilOpKeys = ["pass", "fail", "zFail", "comp"];
++            var stencilOpProps = AnyPropRef(state, stencilOpKeys.Select(k => "stencilOp." + k).ToArray());
++            var stencilOpFrontProps = AnyPropRef(state, stencilOpKeys.Select(k => "stencilOpFront." + k).ToArray());
++            var stencilOpBackProps = AnyPropRef(state, stencilOpKeys.Select(k => "stencilOpBack." + k).ToArray());
+             if (stencilRef != 0.0 || stencilReadMask != 255.0 || stencilWriteMask != 255.0
++                || AnyPropRef(state, "stencilRef", "stencilReadMask", "stencilWriteMask")
++                || stencilOpProps || stencilOpFrontProps || stencilOpBackProps
+                 || !(stencilOpPass == StencilOp.Keep && stencilOpFail == StencilOp.Keep && stencilOpZfail == StencilOp.Keep && stencilOpComp == StencilComp.Always)
+                 || !(stencilOpFrontPass == StencilOp.Keep && stencilOpFrontFail == StencilOp.Keep && stencilOpFrontZfail == StencilOp.Keep && stencilOpFrontComp == StencilComp.Always)
+                 || !(stencilOpBackPass == StencilOp.Keep && stencilOpBackFail == StencilOp.Keep && stencilOpBackZfail == StencilOp.Keep && stencilOpBackComp == StencilComp.Always))
+ 			{
+ 				_sb.AppendLine("Stencil {");
+                 _sb.Indent();
+-				if (stencilRef != 0.0)
+-				{
+-                    _sb.AppendLine($"Ref {stencilRef}");
+-				}
+-				if (stencilReadMask != 255.0)
+-				{
+-                    _sb.AppendLine($"ReadMask {stencilReadMask}");
+-				}
+-				if (stencilWriteMask != 255.0)
+-				{
+-                    _sb.AppendLine($"WriteMask {stencilWriteMask}");
+-				}
+-				if (stencilOpPass != StencilOp.Keep
++                if (stencilRef != 0.0 || AnyPropRef(state, "stencilRef"))
++                {
++                    _sb.AppendLine($"Ref {StateValue(state, "stencilRef", stencilRef)}");
++                }
++                if (stencilReadMask != 255.0 || AnyPropRef(state, "stencilReadMask"))
++                {
++                    _sb.AppendLine($"ReadMask {StateValue(state, "stencilReadMask", stencilReadMask)}");
++                }
++                if (stencilWriteMask != 255.0 || AnyPropRef(state, "stencilWriteMask"))
++                {
++                    _sb.AppendLine($"WriteMask {StateValue(state, "stencilWriteMask", stencilWriteMask)}");
++                }
++                if (stencilOpPass != StencilOp.Keep
+                     || stencilOpFail != StencilOp.Keep
+                     || stencilOpZfail != StencilOp.Keep
+-                    || (stencilOpComp != StencilComp.Always && stencilOpComp != StencilComp.Disabled))
+-				{
+-                    _sb.AppendLine($"Comp {stencilOpComp}");
+-                    _sb.AppendLine($"Pass {stencilOpPass}");
+-                    _sb.AppendLine($"Fail {stencilOpFail}");
+-                    _sb.AppendLine($"ZFail {stencilOpZfail}");
+-				}
+-				if (stencilOpFrontPass != StencilOp.Keep
++                    || (stencilOpComp != StencilComp.Always && stencilOpComp != StencilComp.Disabled)
++                    || stencilOpProps)
++                {
++                    _sb.AppendLine($"Comp {StateValue(state, "stencilOp.comp", stencilOpComp)}");
++                    _sb.AppendLine($"Pass {StateValue(state, "stencilOp.pass", stencilOpPass)}");
++                    _sb.AppendLine($"Fail {StateValue(state, "stencilOp.fail", stencilOpFail)}");
++                    _sb.AppendLine($"ZFail {StateValue(state, "stencilOp.zFail", stencilOpZfail)}");
++                }
++                if (stencilOpFrontPass != StencilOp.Keep
+                     || stencilOpFrontFail != StencilOp.Keep
+                     || stencilOpFrontZfail != StencilOp.Keep
+-                    || (stencilOpFrontComp != StencilComp.Always && stencilOpFrontComp != StencilComp.Disabled))
+-				{
+-                    _sb.AppendLine($"CompFront {stencilOpFrontComp}");
+-                    _sb.AppendLine($"PassFront {stencilOpFrontPass}");
+-                    _sb.AppendLine($"FailFront {stencilOpFrontFail}");
+-                    _sb.AppendLine($"ZFailFront {stencilOpFrontZfail}");
+-				}
+-				if (stencilOpBackPass != StencilOp.Keep
++                    || (stencilOpFrontComp != StencilComp.Always && stencilOpFrontComp != StencilComp.Disabled)
++                    || stencilOpFrontProps)
++                {
++                    _sb.AppendLine($"CompFront {StateValue(state, "stencilOpFront.comp", stencilOpFrontComp)}");
++                    _sb.AppendLine($"PassFront {StateValue(state, "stencilOpFront.pass", stencilOpFrontPass)}");
++                    _sb.AppendLine($"FailFront {StateValue(state, "stencilOpFront.fail", stencilOpFrontFail)}");
++                    _sb.AppendLine($"ZFailFront {StateValue(state, "stencilOpFront.zFail", stencilOpFrontZfail)}");
++                }
++                if (stencilOpBackPass != StencilOp.Keep
+                     || stencilOpBackFail != StencilOp.Keep
+                     || stencilOpBackZfail != StencilOp.Keep
+-                    || (stencilOpBackComp != StencilComp.Always && stencilOpBackComp != StencilComp.Disabled))
+-				{
+-                    _sb.AppendLine($"CompBack {stencilOpBackComp}");
+-                    _sb.AppendLine($"PassBack {stencilOpBackPass}");
+-                    _sb.AppendLine($"FailBack {stencilOpBackFail}");
+-                    _sb.AppendLine($"ZFailBack {stencilOpBackZfail}");
+-				}
++                    || (stencilOpBackComp != StencilComp.Always && stencilOpBackComp != StencilComp.Disabled)
++                    || stencilOpBackProps)
++                {
++                    _sb.AppendLine($"CompBack {StateValue(state, "stencilOpBack.comp", stencilOpBackComp)}");
++                    _sb.AppendLine($"PassBack {StateValue(state, "stencilOpBack.pass", stencilOpBackPass)}");
++                    _sb.AppendLine($"FailBack {StateValue(state, "stencilOpBack.fail", stencilOpBackFail)}");
++                    _sb.AppendLine($"ZFailBack {StateValue(state, "stencilOpBack.zFail", stencilOpBackZfail)}");
++                }
+ 				_sb.Unindent();
+ 				_sb.AppendLine("}");
+ 			}
+@@ -801,7 +830,10 @@ namespace USCSandbox.Processor
+             var blendOpAlpha = (BlendOp)(int)rtBlend["blendOpAlpha.val"].AsFloat;
+             var colMask = (ColorWriteMask)(int)rtBlend["colMask.val"].AsFloat;
+ 
+-            if (srcBlend != BlendMode.One || destBlend != BlendMode.Zero || srcBlendAlpha != BlendMode.One || destBlendAlpha != BlendMode.Zero)
++            var blendProps = AnyPropRef(rtBlend, "srcBlend", "destBlend");
++            var blendAlphaProps = AnyPropRef(rtBlend, "srcBlendAlpha", "destBlendAlpha");
++            if (srcBlend != BlendMode.One || destBlend != BlendMode.Zero || srcBlendAlpha != BlendMode.One || destBlendAlpha != BlendMode.Zero
++                || blendProps || blendAlphaProps)
+             {
+                 _sb.Append("");
+                 _sb.AppendNoIndent("Blend ");
+@@ -809,15 +841,15 @@ namespace USCSandbox.Processor
+                 {
+                     _sb.AppendNoIndent($"{index} ");
+                 }
+-                _sb.AppendNoIndent($"{srcBlend} {destBlend}");
+-                if (srcBlendAlpha != BlendMode.One || destBlendAlpha != BlendMode.Zero)
++                _sb.AppendNoIndent($"{StateValue(rtBlend, "srcBlend", srcBlend)} {StateValue(rtBlend, "destBlend", destBlend)}");
++                if (srcBlendAlpha != BlendMode.One || destBlendAlpha != BlendMode.Zero || blendAlphaProps)
+                 {
+-                    _sb.AppendNoIndent($", {srcBlendAlpha} {destBlendAlpha}");
++                    _sb.AppendNoIndent($", {StateValue(rtBlend, "srcBlendAlpha", srcBlendAlpha)} {StateValue(rtBlend, "destBlendAlpha", destBlendAlpha)}");
+                 }
+                 _sb.AppendNoIndent("\n");
+             }
+ 
+-            if (blendOp != BlendOp.Add || blendOpAlpha != BlendOp.Add)
++            if (blendOp != BlendOp.Add || blendOpAlpha != BlendOp.Add || AnyPropRef(rtBlend, "blendOp", "blendOpAlpha"))
+             {
+                 _sb.Append("");
+                 _sb.AppendNoIndent("BlendOp ");
+@@ -825,19 +857,23 @@ namespace USCSandbox.Processor
+                 {
+                     _sb.AppendNoIndent($"{index} ");
+                 }
+-                _sb.AppendNoIndent($"{blendOp}");
+-                if (blendOpAlpha != BlendOp.Add)
++                _sb.AppendNoIndent($"{StateValue(rtBlend, "blendOp", blendOp)}");
++                if (blendOpAlpha != BlendOp.Add || AnyPropRef(rtBlend, "blendOpAlpha"))
+                 {
+-                    _sb.AppendNoIndent($", {blendOpAlpha}");
++                    _sb.AppendNoIndent($", {StateValue(rtBlend, "blendOpAlpha", blendOpAlpha)}");
+                 }
+                 _sb.AppendNoIndent("\n");
+             }
+ 
+-            if (colMask != ColorWriteMask.All)
++            if (colMask != ColorWriteMask.All || AnyPropRef(rtBlend, "colMask"))
+             {
+                 _sb.Append("");
+                 _sb.AppendNoIndent("ColorMask ");
+-                if (colMask == ColorWriteMask.None)
++                if (PropRef(rtBlend, "colMask") is { } colMaskProp)
++                {
++                    _sb.AppendNoIndent($"[{colMaskProp}]");
++                }
++                else if (colMask == ColorWriteMask.None)
+                 {
+                     _sb.AppendNoIndent("0");
+                 }

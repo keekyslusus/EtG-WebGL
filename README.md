@@ -34,7 +34,9 @@ port/
    *Shader Export Format* = `Decompilation`) → открыть папку игры → *Export Unity Project*
    в `ripped/`.
 3. Шейдеры: AssetRipper вместо них пишет заглушки (`DummyShaderTextExporter`), поэтому
-   собрать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/uscs`
+   склонировать [USCSandbox](https://github.com/nesrak1/USCSandbox) в `tools/src/USCSandbox`, применить
+   `git apply --ignore-whitespace port/patches/uscsandbox-property-refs.patch` (без него теряются ссылки
+   render state на свойства материала: `Ref [_StencilVal]`, `Blend [_SrcBlend] [_DstBlend]`), собрать в `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` рядом с exe) и запустить
    `bash port/decompile_shaders.sh` — декомпилирует DX11-байткод всех шейдеров игры в `tools/uscs/out`.
 4. **Unity закрыта** → `bash port/apply.sh`
@@ -51,6 +53,9 @@ port/
 6. Открыть `ripped/ExportedProject` в Unity 2017.4.27f1 → меню **EtG Web → Do Everything (1-4)**
    (boot-сцена, настройки WebGL 2 / wasm / .NET 2.0, бандлы, dev-сборка в `webbuild/`).
    Дальше при изменениях порта: `apply.sh` → Ctrl+R в Unity → **4. Build WebGL Player**.
+   Если менялись только ассеты в бандлах, хватит **Rebuild Bundles Only → webbuild**. Но шейдеры из
+   *Always Included Shaders* (Graphics Settings: `Brave/PlayerShader`, `LitCutoutUber`, `LitBlendUber`…)
+   лежат в данных плеера, и `Shader.Find` в браузере берёт именно их: после правки шейдеров нужен шаг 4.
 7. Запускать через любой локальный HTTP-сервер из `webbuild/` (с `file://` не работает).
 
 Лог сборки Unity: `%LOCALAPPDATA%\Unity\Editor\Editor.log`.

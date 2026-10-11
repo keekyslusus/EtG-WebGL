@@ -233,7 +233,9 @@ public static class EtgWebBuild
         // For asset-only changes (shaders, textures, prefabs inside bundles): no IL2CPP, no player
         // build. BootLoader caches bundles by manifest hash, so browsers re-download only what changed.
         // Assets that live in the player data itself (the Boot/LoadingDungeon scenes and what they
-        // reference directly, Resources/) still need a full player build.
+        // reference directly, Resources/, and the Always Included Shaders - Brave/PlayerShader,
+        // LitCutoutUber... which Shader.Find returns in preference to bundle copies) still need a
+        // full player build.
         string target = Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput));
         if (!File.Exists(Path.Combine(target, "index.html")))
         {
