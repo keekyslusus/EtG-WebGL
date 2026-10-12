@@ -9,6 +9,7 @@
 
 # build outputs
 port/build/
+port/node_modules/
 port/**/bin/
 port/**/obj/
 /port/audio/__pycache__

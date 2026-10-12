@@ -1,6 +1,6 @@
 # EtG-WebGL
 
-Unofficial browser port of Enter the Gungeon (Unity 2017.4, Mono)
+Unofficial browser port of Enter the Gungeon
 This repository contains only the porting tools - the game files must come from your own purchased copy.
 
 ## Requirements
@@ -8,10 +8,9 @@ This repository contains only the porting tools - the game files must come from 
 - Enter the Gungeon 2.1.9 (Steam) - the game folder
 - [Unity 2017.4.27f1](https://unity.com/releases/editor/archive) + the **WebGL Build Support** module
 - .NET SDK 9
-- [AssetRipper](https://github.com/AssetRipper/AssetRipper/releases) 2.x
+- [AssetRipper](https://github.com/AssetRipper/AssetRipper/releases) 2.0.0 (the port was made with build `1ac666f`;
+  another version may export the project differently)
 - Git Bash (for `apply.sh`), Python 3 (for `setstack.py`)
-
-## Layout
 
 ```
 Enter the Gungeon/      game files (not in git)
@@ -31,6 +30,7 @@ port/
   abtest.sh / abtest_report.py   the same frames in the editor on D3D11 and GLES, compared (port/README.md)
   variant-selection.sh / variant_selection.py   original variant inventory vs actual Unity branch selection
   setstack.py   increases the stack size of an exe (needed for asm2wasm)
+  package.json, tsconfig.json, globals.d.ts   type check of the page JS (see Building)
 ```
 
 ## Building
@@ -40,7 +40,8 @@ port/
    *Shader Export Format* = `Decompilation`) -> open the game folder -> *Export Unity Project*
    to `ripped/`.
 3. Shaders: AssetRipper writes stubs in their place (`DummyShaderTextExporter`), so
-   clone [USCSandbox](https://github.com/nesrak1/USCSandbox) into `tools/src/USCSandbox`, apply
+   clone [USCSandbox](https://github.com/nesrak1/USCSandbox) into `tools/src/USCSandbox`, check out the commit the
+   patch was made against (`git checkout 044bc319866ca2f7a570942cb55d74458de7e2c0`), apply
    `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (fixes for the decompiler bugs listed under
    *Shaders* below, plus the `--dump` mode), build it into `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` next to the exe) and run
@@ -52,6 +53,9 @@ port/
    from StreamingAssets, verifies references.
    Sound: `python port/audio/build_audio.py` (needs [vgmstream](https://github.com/vgmstream/vgmstream) in
    `tools/vgmstream` and ffmpeg on PATH) converts the Wwise banks into `StreamingAssets/webaudio`.
+   The reverbs and effects it ships are measured in the game's own Wwise and kept in `port/build/audio/ir`,
+   which is not in git: measure it again with `measure_ir.py` and
+   `measure_fx.py` (`port/README.md`, *Effects*). Without it the sound is built dry.
 5. **Once**: `asm2wasm` from Unity 2017 crashes with a stack overflow on a large assembly.
    Increase its stack size (requires admin rights, the original is kept as `.orig`):
    ```
@@ -98,10 +102,7 @@ added to Build Settings for the duration of Play Mode and removed after exiting.
 The game ships its shaders only as DX11 bytecode (DXBC). USCSandbox decompiles them into ShaderLab/CG,
 `fix_shaders.py` adapts the result to gles3, `apply.sh` puts it into the project.
 
-## Limitations
+## Sounds
 
-- Sound is not Wwise but a re-implementation on Web Audio (`port/audio`, see *Sound* in `port/README.md`):
-  differences from the game remain, measured by `port/audio/audiodiff.py`.
-- WebGL 2 only (the decompiled shaders don't compile for WebGL 1).
-- Floor generation is single-threaded — slower than on PC.
-- Game ownership verification (Steam sign-in) isn't implemented yet.
+Sound is not Wwise but a re-implementation on Web Audio (`port/audio`, see *Sound* in `port/README.md`):
+differences from the game remain, measured by `port/audio/audiodiff.py`.

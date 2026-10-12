@@ -5,7 +5,8 @@
 (function () {
   "use strict";
 
-  var Etg = window.Etg = {};
+  var Etg = {};
+  window.Etg = Etg;
   Etg.assets = "assets/";
 
   // ------------------------------------------------------------------ pixel icons
@@ -255,10 +256,10 @@
   function openDb() {
     return new Promise(function (resolve, reject) {
       var req = indexedDB.open(IDB_NAME, IDB_VERSION);
-      req.onupgradeneeded = function (e) {
-        var db = e.target.result;
+      req.onupgradeneeded = function () {
+        var db = req.result;
         var store = db.objectStoreNames.contains(IDB_STORE)
-          ? e.target.transaction.objectStore(IDB_STORE)
+          ? req.transaction.objectStore(IDB_STORE)
           : db.createObjectStore(IDB_STORE);
         if (!store.indexNames.contains("timestamp")) {
           store.createIndex("timestamp", "timestamp", { unique: false });
@@ -566,14 +567,15 @@
     });
   };
 
+  var toastTimer;
   /** Shows a short message in the page's [data-toast] element. */
   Etg.toast = function (text) {
     var el = document.querySelector("[data-toast]");
     if (!el) return;
     el.textContent = text;
     el.classList.add("show");
-    clearTimeout(Etg.toast.timer);
-    Etg.toast.timer = setTimeout(function () { el.classList.remove("show"); }, 3500);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.classList.remove("show"); }, 3500);
   };
 
   /** Pixel-styled yes/no dialog. Resolves to true on "yes". */
@@ -590,10 +592,12 @@
       ul.appendChild(li);
     });
     root.querySelector("p").textContent = text || "";
-    root.querySelector("[data-yes]").textContent = yes || "Yes";
-    root.querySelector("[data-no]").textContent = no || "Cancel";
+    var yesButton = /** @type {HTMLButtonElement} */ (root.querySelector("[data-yes]"));
+    var noButton = /** @type {HTMLButtonElement} */ (root.querySelector("[data-no]"));
+    yesButton.textContent = yes || "Yes";
+    noButton.textContent = no || "Cancel";
     document.body.appendChild(root);
-    root.querySelector("[data-no]").focus();
+    noButton.focus();
     return new Promise(function (resolve) {
       function done(v) {
         root.remove();
@@ -605,8 +609,8 @@
         e.stopImmediatePropagation();
       }
       window.addEventListener("keydown", key, true);
-      root.querySelector("[data-yes]").onclick = function () { done(true); };
-      root.querySelector("[data-no]").onclick = function () { done(false); };
+      yesButton.onclick = function () { done(true); };
+      noButton.onclick = function () { done(false); };
     });
   };
 

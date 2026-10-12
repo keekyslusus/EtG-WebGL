@@ -26,9 +26,17 @@
 
   let base = '';
   let version = '';
-  let data = null, nodes = null, events = null, media = null, names = {};
-  let ctx = null, masterIn = null, analyser = null;
-  let offline = null;                     // OfflineAudioContext while api.render() runs (tests)
+  // Set by init() from audio.json before anything else runs (audio-json.d.ts has the format).
+  /** @type {WwAudioData} */ let data;
+  /** @type {WwAudioData['nodes']} */ let nodes;
+  /** @type {WwAudioData['events']} */ let events;
+  /** @type {WwAudioData['media']} */ let media;
+  /** @type {WwAudioData['names']} */ let names = {};
+  // The live AudioContext, or the OfflineAudioContext of a test render; created by init().
+  /** @type {BaseAudioContext} */ let ctx;
+  /** @type {GainNode} */ let masterIn;
+  /** @type {AnalyserNode | null} */ let analyser = null;
+  /** @type {OfflineAudioContext | null} */ let offline = null; // while api.render() runs (tests)
   let nodeFxOff = false, busFxOff = false; // test switches: render without the effects on sounds / on busses
   let random = Math.random;
   let timers = [];                        // offline: [{t, fn}] on the context clock
@@ -152,10 +160,6 @@
       default: break;
     }
     return a + (b - a) * t;
-  }
-
-  function node(id) {
-    return nodes[id];
   }
 
   // [id, parent, grandparent...] through the actor-mixer / container hierarchy (not busses).
@@ -358,6 +362,7 @@
   }
 
   // Wwise Parametric EQ filter types -> BiquadFilterNode types
+  /** @type {BiquadFilterType[]} */
   const EQ_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch', 'lowshelf', 'highshelf', 'peaking'];
 
   // Appends the effects of an fx list ([[index, effect id]...]) that run inside a voice (or a bus) after
@@ -468,6 +473,7 @@
     shaper.curve = curve;
     shaper.oversample = '2x';
     drive.connect(shaper);
+    /** @type {AudioNode} */
     let z = shaper;
     if (m.tone < 20000) {
       const lp = onePole(m.tone, 'lp');
@@ -916,6 +922,7 @@
           src.loopEnd = m.loop[1] / m.rate;
         }
       }
+      /** @type {AudioNode} */
       let out = src;
       const p = this.params();
       const h = this.harm;
@@ -1320,7 +1327,7 @@
       warnOnce('nomedia' + n.media, 'sound', id, 'has no media', n.media);
       return;
     }
-    if (!enforceLimits(id, pc)) {
+    if (!enforceLimits(id)) {
       return;
     }
     const v = new Voice(id, pc);
@@ -1392,7 +1399,7 @@
   // Max instances (Advanced Settings): bit 0 = kill newest instead of oldest. Then the global
   // voice limit: the lowest-priority voice (the oldest among equals) makes room, or the new one
   // is dropped if it is the least important.
-  function enforceLimits(id, pc) {
+  function enforceLimits(id) {
     for (const nid of chainOf(id)) {
       const lim = nodes[nid].max;
       if (!lim) continue;
@@ -2222,7 +2229,7 @@
       }
     },
 
-    trigger() {}, // EtG's music has no stingers
+    trigger(trigger, obj) {}, // EtG's music has no stingers
   };
 
   // --- public API (called from EtgWebShim.jslib) -------------------------------------------
@@ -2294,11 +2301,12 @@
       if (ctx) return;
       base = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
       version = buildVersion || '';
-      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const live = new (window.AudioContext || window.webkitAudioContext)();
+      ctx = live;
       const unlock = () => {
         if (offline) return;
-        if (ctx.state !== 'running') ctx.resume();
-        if (!unlocked && ctx.state === 'running') {
+        if (live.state !== 'running') live.resume();
+        if (!unlocked && live.state === 'running') {
           unlocked = true;
         }
       };

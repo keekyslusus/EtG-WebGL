@@ -1,12 +1,6 @@
 ### Differential test (`bash port/shaderdiff.sh`)
 
-Finds decompiled shaders that compute something else than the original, without running the game. For every
-variant (shader × pass × keywords × vertex/fragment): the original DXBC (dumped by `decompile_shaders.sh`) and the
-decompiled CG of that variant, compiled back with `d3dcompiler_47` (`vs_4_0`/`ps_4_0`, Unity's auto-includes and
-defines, the variant's keywords), both run on D3D11 WARP with the same random constants, textures (random mip
-chains), vertex attributes / interpolants; outputs are compared with a tolerance, NaN/Inf, sign flips and
-discards reported separately. For each mismatch it zeroes one input at a time to tell which constant/texture/input
-the difference depends on. One run (3068 variants, 8 trials × 256 samples each) takes about 2 minutes.
+Finds decompiled shaders that compute something else than the original. For every variant (shader × pass × keywords × vertex/fragment): the original DXBC (dumped by `decompile_shaders.sh`) and the decompiled CG of that variant, compiled back with `d3dcompiler_47` (`vs_4_0`/`ps_4_0`, Unity's auto-includes and defines, the variant's keywords), both run on D3D11 WARP with the same random constants, textures (random mip chains), vertex attributes / interpolants; outputs are compared with a tolerance, NaN/Inf, sign flips and discards reported separately. For each mismatch it zeroes one input at a time to tell which constant/texture/input the difference depends on.
 
 - Report: `port/build/shaderdiff-report/report.md`, grouped by likely cause; per mismatch
   `failures/<shader>/<variant>.md` with the inputs and outputs of example samples, the disassembly of both
@@ -205,6 +199,9 @@ is a small Wwise-like engine on Web Audio that interprets the banks' object grap
   `WwiseRef <root> <cases.json> <out> [--only ids] [--remove-fx bus:index,...] [--remove-node-fx node:index,...]`;
   steps: `postEvent`, `playNode` (a sound or container alone, through a DynamicSequence), `setSwitch`, `setState`,
   `setRtpc`, `stopAll`.
+- `listen.py`: a page to listen to both side by side (`port/build/listen/index.html`): every event whose sounds
+  pass through an effect on a sound (or `--filter REGEX`), rendered by Wwise, by the engine and by the engine
+  without its effect models.
 - `audiodiff.py`: every event (per switch/state value), music state and transition, volume curve, mix state and 3D
   position rendered by WwiseRef and by `EtgAudio.render()` in headless Chrome; level, peak, onset, end, spectral
   centroid and balance compared (`port/build/audiodiff/report.html`, worst cases with audio of both).
