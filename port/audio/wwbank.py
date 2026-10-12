@@ -464,6 +464,12 @@ def parametric_eq(params):
     return {"bands": bands, "output": struct.unpack_from("<f", params, 51)[0]}
 
 
+def delay(params):
+    """Wwise Delay: delay time s, feedback %, wet/dry mix %, output level dB, feedback on, LFE."""
+    t, feedback, mix, output, fb_on, _ = struct.unpack_from("<ffffBB", params, 0)
+    return {"time": t, "feedback": feedback if fb_on else 0.0, "mix": mix, "output": output}
+
+
 def parse_attenuation(r, o):
     if r.u8():  # cone
         o["cone"] = {"inside": r.f32(), "outside": r.f32(), "volume": r.f32(), "lpf": r.f32(), "hpf": r.f32()}

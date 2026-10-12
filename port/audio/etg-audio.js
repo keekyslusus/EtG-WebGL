@@ -282,21 +282,24 @@
 
     for (const id in nodes) {
       const n = nodes[id];
-      if (n.type !== 'bus') {
+      const ir = data.reverbs && data.reverbs[id];
+      // Aux busses only exist as their measured effect (Foyer, Dimension...); the others add nothing.
+      if (n.type !== 'bus' && !(n.type === 'auxbus' && ir)) {
         continue;
       }
+      const aux = n.type === 'auxbus';
       const input = ctx.createGain();
       const filter = ctx.createBiquadFilter();
       filter.type = 'lowpass';
       filter.frequency.value = 22000;
       const output = ctx.createGain();
       input.connect(filter);
-      const ir = data.reverbs && data.reverbs[id];
-      // A measured impulse response stands for the bus's whole effect chain; otherwise its EQs.
+      // A measured impulse response stands for the bus's whole effect chain; otherwise its EQs. An
+      // aux bus stays silent until its response is loaded (its direct signal would double the sound).
       const last = ir ? filter : effectChain(n.fx, filter);
-      last.connect(output);
+      if (!aux) last.connect(output);
       if (ir) loadReverb(ir, last, output);
-      busses.set(+id, { id: +id, input, filter, output, parent: n.parent });
+      busses.set(+id, { id: +id, input, filter, output, parent: n.parent, aux });
     }
     for (const b of busses.values()) {
       const parent = busses.get(b.parent);
@@ -355,21 +358,45 @@
   const EQ_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch', 'lowshelf', 'highshelf', 'peaking'];
 
   // Appends the supported effects of an fx list ([[index, effect id]...]) after `node`; returns the
-  // last node. Parametric EQs become biquads; other plugins (distortion, flanger, delay...) are skipped.
+  // last node. Parametric EQs become biquads, Delay a feedback delay line; the other plugins
+  // (distortion, flanger, harmonizer, tremolo, compressor) are skipped.
   function effectChain(fx, node) {
     if (!fx) return node;
     for (const [, id] of fx) {
       const e = data.effects && data.effects[id];
-      if (!e || e.plugin !== 'parametric_eq') continue;
-      for (const band of e.bands) {
-        if (!band.on || EQ_TYPES[band.type] === undefined) continue;
-        const f = ctx.createBiquadFilter();
-        f.type = EQ_TYPES[band.type];
-        f.frequency.value = Math.min(band.freq, ctx.sampleRate / 2 - 100);
-        f.Q.value = band.q;
-        f.gain.value = band.gain;
-        node.connect(f);
-        node = f;
+      if (!e) continue;
+      if (e.plugin === 'parametric_eq') {
+        for (const band of e.bands) {
+          if (!band.on || EQ_TYPES[band.type] === undefined) continue;
+          const f = ctx.createBiquadFilter();
+          f.type = EQ_TYPES[band.type];
+          f.frequency.value = Math.min(band.freq, ctx.sampleRate / 2 - 100);
+          f.Q.value = band.q;
+          f.gain.value = band.gain;
+          node.connect(f);
+          node = f;
+        }
+      } else if (e.plugin === 'delay') {
+        // dry * (1 - mix) + echo * mix, the echo fed back by `feedback` %
+        const dry = ctx.createGain();
+        dry.gain.value = 1 - e.mix / 100;
+        const delay = ctx.createDelay(Math.max(1, e.time * 2));
+        delay.delayTime.value = e.time;
+        const feedback = ctx.createGain();
+        feedback.gain.value = Math.min(e.feedback / 100, 0.95);
+        const wet = ctx.createGain();
+        wet.gain.value = e.mix / 100;
+        const sum = ctx.createGain();
+        node.connect(dry);
+        dry.connect(sum);
+        node.connect(delay);
+        delay.connect(feedback);
+        feedback.connect(delay);
+        delay.connect(wet);
+        wet.connect(sum);
+        node = sum;
+      } else {
+        continue;
       }
       if (e.output) {
         const g = ctx.createGain();
@@ -380,6 +407,7 @@
     }
     return node;
   }
+
 
   // Swaps the bus's direct path for a ConvolverNode once the impulse response is loaded.
   const reverbBuffers = new Map(); // url -> Promise<AudioBuffer>
@@ -408,7 +436,8 @@
       const acc = newAcc();
       accumulate(acc, b.id, -1);
       const gain = dbToGain(acc.vol + acc.makeup + acc.busvol);
-      approach(b.output.gain, gain, fade, 0.01);
+      // aux busses are switched on their input: a convolver fed silence stops costing CPU
+      approach(b.aux ? b.input.gain : b.output.gain, gain, fade, 0.01);
       approach(b.filter.frequency, acc.lpf > 0 ? lpfToHz(acc.lpf) : 22000, fade, 0.05);
     }
   }
@@ -593,6 +622,14 @@
       this.envRange = range === undefined ? 12 : range;
     }
 
+    // User aux busses the voice sends to: those of the nearest node in its hierarchy with sends.
+    auxSends() {
+      for (const id of this.chain) {
+        if (nodes[id].aux) return nodes[id].aux;
+      }
+      return [];
+    }
+
     // Volume Wwise's HDR sees right now: the voice's volume plus its tracked envelope.
     hdrLevelAt(t) {
       if (!this.env || !this.started || !this.buffer) return this.hdrLevel;
@@ -700,6 +737,10 @@
         out = this.panner;
       }
       out.connect(busInput(this.bus));
+      for (const auxId of this.auxSends()) {
+        const b = busses.get(auxId);
+        if (b && b.aux) out.connect(b.input); // user aux send, 0 dB
+      }
       src.playbackRate.value = centsToRate(p.pitch);
       const at = Math.max(this.when, now);
       if (this.hdrBus) {

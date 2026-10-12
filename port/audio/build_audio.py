@@ -144,6 +144,9 @@ def common(o):
     fx = [[f["index"], f["id"]] for f in o.get("fx", []) if f["id"]]
     if fx:
         n["fx"] = fx
+    aux = o.get("aux")
+    if aux and aux["bits"] & 8 and any(aux["aux"]):  # user-defined aux sends (send volume 0 dB in EtG)
+        n["aux"] = [a for a in aux["aux"] if a]
     return n
 
 
@@ -334,6 +337,8 @@ def main():
             e = {"plugin": o["plugin"]}
             if o["plugin"] == "parametric_eq":
                 e.update(wwbank.parametric_eq(o["params"]))
+            elif o["plugin"] == "delay":
+                e.update(wwbank.delay(o["params"]))
             effects[str(oid)] = e
 
     # Bus reverbs measured in the real Wwise by measure_ir.py (port/build/audio/ir/<bus>.wav).
