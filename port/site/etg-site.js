@@ -548,6 +548,105 @@
     return instance;
   };
 
+  // ------------------------------------------------------------------ frame monitor
+
+  // Unity's WebGL main loop runs from requestAnimationFrame, so wrapping it measures the game's frames
+  // without touching the build: the interval between frames (FPS), the time the frame's code takes
+  // on the main thread (CPU: game logic plus issuing the GL calls) and, where the browser has
+  // EXT_disjoint_timer_query_webgl2, the time the GPU spends on that frame's commands. Frames come
+  // at the display's refresh rate; a frame whose CPU or GPU time doesn't fit waits for the next one.
+  // On with ?fps in the address or F3.
+  var monitor = null;
+
+  Etg.toggleFrameMonitor = function () {
+    if (monitor) {
+      monitor.el.remove();
+      clearInterval(monitor.timer);
+      monitor = null;
+      return;
+    }
+    var el = document.createElement("div");
+    el.className = "frame-monitor";
+    document.body.appendChild(el);
+    monitor = { el: el, intervals: [], cpu: [], gpu: [], last: 0, queries: [], timer: 0 };
+    monitor.timer = setInterval(showFrameMonitor, 500);
+    wrapAnimationFrame();
+  };
+
+  var wrapped = false;
+  function wrapAnimationFrame() {
+    if (wrapped) return;
+    wrapped = true;
+    var raf = window.requestAnimationFrame.bind(window);
+    window.requestAnimationFrame = function (callback) {
+      return raf(function (time) {
+        if (!monitor) return callback(time);
+        var start = performance.now();
+        var gl = Etg.game && Etg.game.Module && Etg.game.Module.ctx;
+        var query = gl && beginGpuQuery(gl);
+        try {
+          callback(time);
+        } finally {
+          var end = performance.now();
+          if (query) gl.endQuery(query.ext.TIME_ELAPSED_EXT);
+          if (monitor.last) monitor.intervals.push(start - monitor.last);
+          monitor.last = start;
+          monitor.cpu.push(end - start);
+          if (gl) collectGpuQueries(gl);
+        }
+      });
+    };
+  }
+
+  function beginGpuQuery(gl) {
+    var ext = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+    if (!ext || monitor.queries.length > 8) return null;
+    var q = { ext: ext, query: gl.createQuery() };
+    gl.beginQuery(ext.TIME_ELAPSED_EXT, q.query);
+    monitor.queries.push(q);
+    return q;
+  }
+
+  // Results arrive a few frames later; a disjoint event (GPU reset, power state) voids them.
+  function collectGpuQueries(gl) {
+    while (monitor.queries.length) {
+      var q = monitor.queries[0];
+      if (!gl.getQueryParameter(q.query, gl.QUERY_RESULT_AVAILABLE)) break;
+      var ns = gl.getQueryParameter(q.query, gl.QUERY_RESULT);
+      if (!gl.getParameter(q.ext.GPU_DISJOINT_EXT)) monitor.gpu.push(ns / 1e6);
+      gl.deleteQuery(q.query);
+      monitor.queries.shift();
+    }
+  }
+
+  function showFrameMonitor() {
+    function stats(a) {
+      if (!a.length) return "-";
+      var sum = 0, max = 0;
+      a.forEach(function (v) { sum += v; max = Math.max(max, v); });
+      return (sum / a.length).toFixed(1) + " ms (max " + max.toFixed(1) + ")";
+    }
+    var m = monitor, n = m.intervals.length;
+    var fps = n ? 1000 / (m.intervals.reduce(function (a, b) { return a + b; }, 0) / n) : 0;
+    var canvas = Etg.game && Etg.game.Module && Etg.game.Module.canvas;
+    m.el.textContent = fps.toFixed(0) + " FPS\nframe " + stats(m.intervals) + "\ncpu   " + stats(m.cpu) +
+      "\ngpu   " + (m.gpu.length ? stats(m.gpu) : "n/a") + (canvas ? "\n" + canvas.width + "x" + canvas.height : "");
+    m.intervals = [];
+    m.cpu = [];
+    m.gpu = [];
+  }
+
+  if (/[?&]fps\b/.test(location.search)) {
+    window.addEventListener("load", function () { Etg.toggleFrameMonitor(); });
+  }
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "F3") {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      Etg.toggleFrameMonitor();
+    }
+  }, true);
+
   /** "312.4 MB"-style size. */
   Etg.formatMB = function (n) {
     return (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + " MB";

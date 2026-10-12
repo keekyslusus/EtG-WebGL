@@ -95,6 +95,21 @@ button:disabled {
   transform: translate(-50%, 0);
 }
 
+/* Frame monitor (F3 or ?fps): top-left over the game. */
+.frame-monitor {
+  position: fixed;
+  left: 8px;
+  top: 8px;
+  padding: 6px 8px 4px;
+  background: var(--bg);
+  border: 2px solid var(--fg);
+  font-size: 16px;
+  line-height: 1.1;
+  white-space: pre;
+  pointer-events: none;
+  z-index: 100;
+}
+
 /* Segmented loading bar: filled with 1-art-pixel gaps, like the game's ammo clips. */
 .segbar {
   display: flex;
