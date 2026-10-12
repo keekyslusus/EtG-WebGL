@@ -140,6 +140,18 @@ public static class EtgWebBuild
     }
 
     [MenuItem("EtG Web/3. Build AssetBundles (WebGL)")]
+    public static void BuildBundlesMenu()
+    {
+        BuildBundles();
+        // The player build copies StreamingAssets only when it runs; bundles built after it (step 3
+        // after step 4) would otherwise never reach webbuild and the browser keeps the old shaders.
+        string target = Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput));
+        if (File.Exists(Path.Combine(target, "index.html")))
+        {
+            CopyBundlesToWebBuild(target);
+        }
+    }
+
     public static void BuildBundles()
     {
         foreach (var pair in SceneBundles)
@@ -243,7 +255,11 @@ public static class EtgWebBuild
         }
         FixTextureFormats();
         BuildBundles();
+        CopyBundlesToWebBuild(target);
+    }
 
+    private static void CopyBundlesToWebBuild(string target)
+    {
         string source = Path.GetFullPath(BundleOutput);
         string dest = Path.Combine(Path.Combine(target, "StreamingAssets"), "Assets");
         int copied = 0;
