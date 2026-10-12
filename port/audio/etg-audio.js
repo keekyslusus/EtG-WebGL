@@ -409,6 +409,22 @@
   }
 
 
+  // Seconds an effect chain keeps sounding after its input stops (echoes down to -60 dB, at most 4 s).
+  function effectTail(chain) {
+    let tail = 0;
+    for (const id of chain) {
+      for (const [, fxId] of nodes[id].fx || []) {
+        const e = data.effects && data.effects[fxId];
+        if (e && e.plugin === 'delay') {
+          const fb = Math.min(e.feedback / 100, 0.95);
+          const repeats = fb > 0.001 ? Math.log(0.001) / Math.log(fb) : 1;
+          tail = Math.max(tail, Math.min(4, e.time * (repeats + 1)));
+        }
+      }
+    }
+    return tail;
+  }
+
   // Swaps the bus's direct path for a ConvolverNode once the impulse response is loaded.
   const reverbBuffers = new Map(); // url -> Promise<AudioBuffer>
   function loadReverb(url, from, to) {
@@ -727,6 +743,7 @@
         out = this.hpf;
       }
       for (const id of this.chain) out = effectChain(nodes[id].fx, out); // sound first, then its parents
+      this.fxTail = effectTail(this.chain);
       this.gain = ctx.createGain();
       out.connect(this.gain);
       out = this.gain;
@@ -853,9 +870,14 @@
         const e = buffers.get(this.mediaId);
         if (e) e.refs--;
       }
-      for (const n of [this.src, this.lpf, this.hpf, this.gain, this.panner]) {
+      for (const n of [this.src, this.lpf, this.hpf]) {
         if (n) n.disconnect();
       }
+      // an echo keeps ringing after the sound ends, as in Wwise
+      const out = [this.gain, this.panner];
+      const cut = () => out.forEach((n) => n && n.disconnect());
+      if (this.fxTail > 0 && !this.fadingOut) later(cut, this.fxTail * 1000);
+      else cut();
       if (this.onEnded) {
         this.onEnded(this);
       }
@@ -1297,6 +1319,30 @@
     param.linearRampToValueAtTime(to, t1);
   }
 
+  // A fade from `from` to `to` over [begin, end] following an AkCurveInterpolation shape. A fade that
+  // began in the past continues from where it would be now.
+  function fadeCurve(param, begin, end, from, to, curve) {
+    const now = ctx.currentTime;
+    const start = Math.max(begin, now);
+    if (start > now) {
+      param.cancelScheduledValues(now);
+      param.setValueAtTime(from, now); // hold the starting value until the fade begins
+    }
+    param.cancelScheduledValues(start);
+    if (end - start < 0.005) {
+      param.setValueAtTime(to, start);
+      return;
+    }
+    const dur = Math.max(end - begin, 0.005);
+    const n = 32;
+    const values = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = clamp((start + ((end - start) * i) / (n - 1) - begin) / dur, 0, 1);
+      values[i] = from + (to - from) * interp(0, 1, x, curve === undefined ? 4 : curve);
+    }
+    param.setValueCurveAtTime(values, start, end - start);
+  }
+
   function makePlayer(id, inst) {
     const n = nodes[id];
     if (!n) return null;
@@ -1425,8 +1471,8 @@
       }
     }
 
-    fadeTo(t0, t1, to) {
-      ramp(this.fade.gain, t0, t1, to);
+    fadeTo(t0, t1, from, to, curve) {
+      fadeCurve(this.fade.gain, t0, t1, from, to, curve);
     }
 
     stop(t) {
@@ -1573,8 +1619,8 @@
       return this.past.concat(this.cur ? [this.cur] : []);
     }
 
-    fadeTo(t0, t1, to) {
-      for (const p of this.active()) p.fadeTo(t0, t1, to);
+    fadeTo(t0, t1, from, to, curve) {
+      for (const p of this.active()) p.fadeTo(t0, t1, from, to, curve);
     }
 
     stop(t) {
@@ -1646,13 +1692,17 @@
       return this.child ? this.child.current() : null;
     }
 
+    // The first child fades in as the transition rules say for entering it from nothing, from the
+    // start (the rule's offset only applies to real transitions) - matches Wwise in the audiodiff.
     start(t, offset) {
       this.childId = this.resolve();
       this.child = this.childId ? makePlayer(this.childId, this.inst) : null;
-      if (this.child) {
-        this.child.prepare();
-        this.child.start(t, offset);
-      }
+      if (!this.child) return;
+      this.child.prepare();
+      this.child.start(t, offset);
+      const rule = this.rule([], this.childId);
+      const df = rule && rule.dst_rule.fade.time > 0 ? rule.dst_rule.fade : null;
+      if (df) this.child.fadeTo(t, t + df.time / 1000, 0, 1, df.curve);
     }
 
     onGroupChange(group) {
@@ -1702,13 +1752,19 @@
       const rule = this.rule(src ? src.path() : [], dstId);
       const sr = rule ? rule.src_rule : { fade: { time: 0, offset: 0 }, sync: 0 };
       const dr = rule ? rule.dst_rule : { fade: { time: 0, offset: 0 }, entry: 0 };
-      const ts = this.syncTime(sr.sync, now);
+      let ts = this.syncTime(sr.sync, now);
+      if (sr.sync === 0 || !src) {
+        // immediate: late enough that neither fade has to begin in the past (Wwise does the same)
+        const lead = Math.max(0, dr.fade.time > 0 ? -dr.fade.offset / 1000 : 0,
+          src && sr.fade.time > 0 ? (sr.fade.time - sr.fade.offset) / 1000 : 0);
+        ts = Math.max(ts, now + lead);
+      }
       let entryOffset = 0;
       if (src) {
         const seg = src.current();
         if (dr.entry === 1 && seg && seg.t0 !== undefined) entryOffset = ts - seg.t0; // same time
         const end = ts + sr.fade.offset / 1000;
-        if (sr.fade.time > 0) src.fadeTo(end - sr.fade.time / 1000, end, 0);
+        if (sr.fade.time > 0) src.fadeTo(end - sr.fade.time / 1000, end, 1, 0, sr.fade.curve);
         src.stop(Math.max(end, now));
         this.old.push(src);
       }
@@ -1718,9 +1774,8 @@
         this.child.prepare();
         this.child.start(ts, entryOffset);
         if (dr.fade.time > 0) {
-          const begin = Math.max(ts + dr.fade.offset / 1000, ctx.currentTime);
-          this.child.fadeTo(ctx.currentTime, ctx.currentTime, 0);
-          this.child.fadeTo(begin, begin + dr.fade.time / 1000, 1);
+          const begin = ts + dr.fade.offset / 1000;
+          this.child.fadeTo(begin, begin + dr.fade.time / 1000, 0, 1, dr.fade.curve);
         }
       }
     }
@@ -1739,8 +1794,8 @@
       return this.old.concat(this.child ? [this.child] : []);
     }
 
-    fadeTo(t0, t1, to) {
-      for (const p of this.active()) p.fadeTo(t0, t1, to);
+    fadeTo(t0, t1, from, to, curve) {
+      for (const p of this.active()) p.fadeTo(t0, t1, from, to, curve);
     }
 
     stop(t) {
