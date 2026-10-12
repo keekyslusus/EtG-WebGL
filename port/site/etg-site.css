@@ -32,12 +32,6 @@ body {
   user-select: none;
 }
 
-canvas.pixel,
-img.pixel {
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
-}
-
 button {
   font: inherit;
   color: inherit;

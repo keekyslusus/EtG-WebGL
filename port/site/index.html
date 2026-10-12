@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Enter the Gungeon</title>
-  <link rel="icon" href="TemplateData/favicon.ico">
+  <link rel="icon" href="assets/ico.ico">
   <link rel="stylesheet" href="etg-site.css">
   <style>
     /* The game edge to edge. A title card while loading, then only a small
@@ -103,20 +103,6 @@
       border-color: #222;
     }
 
-    .ghost,
-    .blob {
-      position: fixed;
-      bottom: calc(var(--px) * 6);
-    }
-
-    .ghost {
-      right: calc(var(--px) * 10);
-    }
-
-    .blob {
-      left: calc(var(--px) * 10);
-    }
-
     .tools {
       position: fixed;
       top: 10px;
@@ -182,8 +168,6 @@
       <button class="btn" id="export"><span data-icon="export"></span>Export Save</button>
       <button class="btn" id="import"><span data-icon="import"></span>Import Save</button>
     </div>
-    <canvas id="blob" class="pixel blob"></canvas>
-    <canvas id="ghost" class="pixel ghost"></canvas>
   </div>
 
   <div class="toast" data-toast></div>
@@ -195,35 +179,14 @@
       var card = document.getElementById("card");
       var tools = document.getElementById("tools");
       var playBtn = document.getElementById("play");
-      var anims = [];
-      var k = 2;
-
-      function sizeAnims() {
-        anims.forEach(function (a) {
-          a.canvas.style.width = a.canvas.width * k + "px";
-          a.canvas.style.height = a.canvas.height * k + "px";
-        });
-      }
-
       function layout() {
         // The card is laid out on a 380x210 art-pixel grid (the button row is ~290 wide).
-        k = Etg.fitScale(380, 210, innerWidth - 32, innerHeight - 32);
+        var k = Etg.fitScale(380, 210, innerWidth - 32, innerHeight - 32);
         document.documentElement.style.setProperty("--px", k + "px");
         card.querySelectorAll("[data-icon]").forEach(function (el) {
           el.innerHTML = Etg.icon(el.getAttribute("data-icon"), k);
         });
-        sizeAnims();
       }
-
-      function anim(id, name) {
-        var canvas = document.getElementById(id);
-        return Etg.spriteAnim(canvas, name).then(function (handle) {
-          anims.push({ canvas: canvas, stop: handle.stop });
-          sizeAnims();
-        });
-      }
-      anim("blob", "blob");
-      anim("ghost", "ghost");
 
       Etg.fillIcons(tools);
       layout();
@@ -248,8 +211,6 @@
       playBtn.onclick = function () {
         started = true;
         card.classList.add("gone");
-        // The card fades out; then its animations stop drawing behind the game.
-        setTimeout(function () { anims.forEach(function (a) { a.stop(); }); }, 400);
         Etg.game.Module.canvas.focus();
       };
       addEventListener("mousemove", function () {

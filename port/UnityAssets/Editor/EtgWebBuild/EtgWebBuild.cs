@@ -52,6 +52,12 @@ public static class EtgWebBuild
     [MenuItem("EtG Web/2. Apply WebGL Player Settings")]
     public static void ApplyPlayerSettings()
     {
+        ApplyPlayerSettings(true);
+    }
+
+    // fullExceptions: development builds; release builds get the cheaper exception support (below).
+    private static void ApplyPlayerSettings(bool fullExceptions)
+    {
         PlayerSettings.runInBackground = true;
         PlayerSettings.stripEngineCode = false;
         PlayerSettings.SetScriptingBackend(BuildTargetGroup.WebGL, ScriptingImplementation.IL2CPP);
@@ -77,7 +83,15 @@ public static class EtgWebBuild
         PlayerSettings.WebGL.emscriptenArgs = "--js-opts 0";
         PlayerSettings.WebGL.dataCaching = true;
         PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
-        PlayerSettings.WebGL.exceptionSupport = WebGLExceptionSupport.FullWithStacktrace;
+        // Full support makes il2cpp emit a null check before every member access, a bounds check on every
+        // array access and (WebGL can't walk the native stack) a push/pop of its own call stack in every
+        // managed method: measured in the browser, the game's code took 24-30 ms a frame in combat. EtG
+        // never catches NullReferenceException; its catch blocks (dfGUI bindings, FullInspector, iTween,
+        // reflection) wrap explicit throws, which "explicitly thrown only" still delivers. A null access
+        // then reads memory instead of throwing, so development builds keep full support to show bugs.
+        PlayerSettings.WebGL.exceptionSupport = fullExceptions
+            ? WebGLExceptionSupport.FullWithStacktrace
+            : WebGLExceptionSupport.ExplicitlyThrownExceptionsOnly;
 
         // linkerTarget (asm.js / wasm) only exists from 2018.1. On 2017.4 the
         // "WebAssembly (experimental)" checkbox is the serialized webGLUseWasm field.
@@ -99,7 +113,8 @@ public static class EtgWebBuild
                   " memory=" + PlayerSettings.WebGL.memorySize +
                   " template=" + PlayerSettings.WebGL.template +
                   " api=" + PlayerSettings.GetApiCompatibilityLevel(BuildTargetGroup.WebGL) +
-                  " emcc+=\"" + PlayerSettings.WebGL.emscriptenArgs + "\"");
+                  " emcc+=\"" + PlayerSettings.WebGL.emscriptenArgs + "\"" +
+                  " exceptions=" + PlayerSettings.WebGL.exceptionSupport);
     }
 
     private static SerializedObject LoadPlayerSettingsObject()
@@ -307,7 +322,7 @@ public static class EtgWebBuild
             EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetGroup.WebGL, BuildTarget.WebGL);
         }
         // Always re-apply so a stale project setting can't silently produce a WebGL 1 / asm.js build.
-        ApplyPlayerSettings();
+        ApplyPlayerSettings((options & BuildOptions.Development) != 0);
         string output = Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput));
         DateTime started = DateTime.Now;
         string report = BuildPipeline.BuildPlayer(new[] { BootScenePath, FirstGameScenePath }, output, BuildTarget.WebGL, options);

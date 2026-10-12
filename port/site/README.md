@@ -1,17 +1,15 @@
 # Web page around the player
 
-Replaces Unity's default WebGL template page. 1-bit style taken from the game's pause screen; the
-art is extracted from the ripped project, not redrawn. (Two more variants, the animated pause
-menu and the options-screen brick frame around the game, were tried and dropped 2026-10-12.)
+Replaces Unity's default WebGL template page.
 
-- `extract_assets.py` -> `assets/`: the pause screen's sprite animations (blob and ghost are
-  used; positions/timings from `UI Root.prefab`'s dfSprite/dfSpriteAnimation) and the game's
-  `04B_03.ttf` pixel font.
+- `assets/`: `04B_03.ttf`, the game's pixel font (copied from the ripped project by
+  `extract_assets.py`), and `ico.ico`, the tab icon.
 - `index.html`: title card with download progress (MB) and Play / Fullscreen / Export / Import;
   after Play the game fills the window and a small icon toolbar shows up in the top right corner
   while the mouse moves.
-- `etg-site.js`: pixel icons (string grids -> SVG), sprite animations (dfSpriteAnimation's
-  Once/Loop/LoopSection logic), save export/import, fullscreen, UnityLoader glue.
+- `etg-site.js`: pixel icons (string grids -> SVG), save export/import, fullscreen, UnityLoader
+  glue, frame monitor (F3 or `?fps`: FPS, frame / CPU / GPU time; F4 or `?fps=profile`: the CPU
+  time split into WebGL calls, the audio engine, console output and the game's own code).
 - `install.py` copies the page into `webbuild/`; `EtgWebBuild.BuildPlayer` does the same after
   every player build (menu: EtG Web -> Copy Site Page).
 

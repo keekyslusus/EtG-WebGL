@@ -1,6 +1,6 @@
-// Code of the page around the WebGL build (port/site -> webbuild): pixel icons, the game's
-// pause-screen sprite animations, save export/import straight from the IndexedDB that Unity's
-// IDBFS keeps, fullscreen, and the UnityLoader glue.
+// Code of the page around the WebGL build (port/site -> webbuild): pixel icons, save
+// export/import straight from the IndexedDB that Unity's IDBFS keeps, fullscreen, the UnityLoader
+// glue and a frame monitor.
 // Plain ES5-ish browser JS, no dependencies.
 (function () {
   "use strict";
@@ -107,98 +107,11 @@
     }
   };
 
-  // ------------------------------------------------------------------ images
-
-  function loadImage(src) {
-    return new Promise(function (resolve, reject) {
-      var img = new Image();
-      img.onload = function () { resolve(img); };
-      img.onerror = function () { reject(new Error("Could not load " + src)); };
-      img.src = src;
-    });
-  }
-
-  function loadJson(src) {
-    return fetch(src).then(function (r) {
-      if (!r.ok) throw new Error("Could not load " + src);
-      return r.json();
-    });
-  }
+  // ------------------------------------------------------------------ layout
 
   /** Largest integer scale (>= 1) at which a w x h picture fits into maxW x maxH. */
   Etg.fitScale = function (w, h, maxW, maxH) {
     return Math.max(1, Math.floor(Math.min(maxW / w, maxH / h)));
-  };
-
-  // ------------------------------------------------------------------ sprite animations
-
-  // dfSpriteAnimation.Execute: loopType 0 Once, 1 Loop, 2 PingPong (unused here), 3 LoopSection
-  // (play everything, then loop from frame loopFrom; frames before it run at loopFirstLength).
-  function stepAnim(a, dt) {
-    var n = a.frames.length;
-    if (a.done) return n - 1;
-    if (a.delay > 0) {
-      a.delay -= dt;
-      return frameAt(a);
-    }
-    var test = Math.floor(clamp01(a.elapsed / a.length) * n);
-    if (a.loopType === 3 && a.loopFirstLength > 0 && test < a.loopFrom) {
-      a.elapsed += dt * a.length / a.loopFirstLength;
-    } else {
-      a.elapsed += dt;
-    }
-    if (a.elapsed >= a.length) {
-      var delay = a.loopDelay[1] > 0 ? a.loopDelay[0] + Math.random() * (a.loopDelay[1] - a.loopDelay[0]) : 0;
-      if (a.loopType === 0) {
-        a.done = true;
-        return n - 1;
-      } else if (a.loopType === 3) {
-        a.elapsed = a.loopFrom / n * a.length;
-        a.delay = delay;
-        return a.loopFrom;
-      } else {
-        a.elapsed = 0;
-        a.delay = delay;
-        return 0;
-      }
-    }
-    return frameAt(a);
-  }
-
-  function frameAt(a) {
-    return Math.min(a.frames.length - 1, Math.floor(clamp01(a.elapsed / a.length) * a.frames.length));
-  }
-
-  function clamp01(v) {
-    return v < 0 ? 0 : v > 1 ? 1 : v;
-  }
-
-  /** Plays one animation of pause_anim.json (by name) on its own canvas, looping its loop section. */
-  Etg.spriteAnim = function (canvas, name) {
-    return Promise.all([loadImage(Etg.assets + "pause_anim.png"), loadJson(Etg.assets + "pause_anim.json")]).then(function (r) {
-      var sheet = r[0];
-      var a = r[1].anims.filter(function (x) { return x.name === name; })[0];
-      var w = 0, h = 0;
-      a.frames.forEach(function (f) { w = Math.max(w, f[2]); h = Math.max(h, f[3]); });
-      canvas.width = w;
-      canvas.height = h;
-      a.elapsed = 0;
-      a.delay = 0;
-      a.done = false;
-      if (a.loopType === 0) a.loopType = 1;
-      var g = canvas.getContext("2d");
-      var last = performance.now(), running = true;
-      function tick(now) {
-        if (!running) return;
-        var f = a.frames[stepAnim(a, Math.min(0.1, (now - last) / 1000))];
-        last = now;
-        g.clearRect(0, 0, w, h);
-        g.drawImage(sheet, f[0], f[1], f[2], f[3], 0, h - f[3], f[2], f[3]);
-        requestAnimationFrame(tick);
-      }
-      requestAnimationFrame(tick);
-      return { width: w, height: h, stop: function () { running = false; } };
-    });
   };
 
   // ------------------------------------------------------------------ fullscreen
@@ -555,8 +468,52 @@
   // on the main thread (CPU: game logic plus issuing the GL calls) and, where the browser has
   // EXT_disjoint_timer_query_webgl2, the time the GPU spends on that frame's commands. Frames come
   // at the display's refresh rate; a frame whose CPU or GPU time doesn't fit waits for the next one.
-  // On with ?fps in the address or F3.
+  // On with ?fps in the address or F3. F4 (or ?fps=profile) adds where the CPU time goes: the WebGL
+  // calls (the costliest by name) and the audio engine's calls are timed, the rest is the game's
+  // own code (wasm). Timing every call costs some time itself.
   var monitor = null;
+  var profile = null; // {gl: {name: [ms, calls]}, audio: {name: [ms, calls]}}
+
+  function timeMethods(target, bucket, names) {
+    names.forEach(function (name) {
+      var fn = target[name];
+      if (typeof fn !== "function" || fn.etgTimed) return;
+      var timed = function () {
+        if (!profile) return fn.apply(this, arguments);
+        var t = performance.now();
+        try {
+          return fn.apply(this, arguments);
+        } finally {
+          var e = profile[bucket][name] || (profile[bucket][name] = [0, 0]);
+          e[0] += performance.now() - t;
+          e[1]++;
+        }
+      };
+      timed.etgTimed = true;
+      target[name] = timed;
+    });
+  }
+
+  Etg.toggleProfile = function () {
+    if (profile) {
+      profile = null;
+      return;
+    }
+    if (!monitor) Etg.toggleFrameMonitor();
+    var gl = Etg.game && Etg.game.Module && Etg.game.Module.ctx;
+    var names = [];
+    for (var p = gl && Object.getPrototypeOf(gl); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
+      Object.getOwnPropertyNames(p).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
+    }
+    if (gl) timeMethods(gl, "gl", names.filter(function (n) {
+      var d = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(gl), n) ||
+        Object.getOwnPropertyDescriptor(WebGLRenderingContext.prototype, n);
+      return n !== "constructor" && (!d || typeof d.value === "function");
+    }));
+    if (window.EtgAudio) timeMethods(window.EtgAudio, "audio", Object.keys(window.EtgAudio));
+    timeMethods(console, "log", ["log", "info", "warn", "error", "debug"]); // the game's Debug.Log*
+    profile = { gl: {}, audio: {}, log: {}, frames: 0 };
+  };
 
   Etg.toggleFrameMonitor = function () {
     if (monitor) {
@@ -592,6 +549,7 @@
           if (monitor.last) monitor.intervals.push(start - monitor.last);
           monitor.last = start;
           monitor.cpu.push(end - start);
+          if (profile) profile.frames++;
           if (gl) collectGpuQueries(gl);
         }
       });
@@ -629,8 +587,35 @@
     var m = monitor, n = m.intervals.length;
     var fps = n ? 1000 / (m.intervals.reduce(function (a, b) { return a + b; }, 0) / n) : 0;
     var canvas = Etg.game && Etg.game.Module && Etg.game.Module.canvas;
-    m.el.textContent = fps.toFixed(0) + " FPS\nframe " + stats(m.intervals) + "\ncpu   " + stats(m.cpu) +
+    var text = fps.toFixed(0) + " FPS\nframe " + stats(m.intervals) + "\ncpu   " + stats(m.cpu) +
       "\ngpu   " + (m.gpu.length ? stats(m.gpu) : "n/a") + (canvas ? "\n" + canvas.width + "x" + canvas.height : "");
+    if (profile && profile.frames) {
+      var frames = profile.frames;
+      var cpu = m.cpu.reduce(function (a, b) { return a + b; }, 0) / Math.max(m.cpu.length, 1);
+      var total = function (bucket) {
+        var t = 0, c = 0;
+        for (var k in bucket) {
+          t += bucket[k][0];
+          c += bucket[k][1];
+        }
+        return [t / frames, c / frames];
+      };
+      var gl = total(profile.gl), audio = total(profile.audio), log = total(profile.log);
+      text += "\n\nper frame:\ngl    " + gl[0].toFixed(1) + " ms (" + gl[1].toFixed(0) + " calls)" +
+        "\naudio " + audio[0].toFixed(1) + " ms (" + audio[1].toFixed(0) + " calls)" +
+        "\nlog   " + log[0].toFixed(1) + " ms (" + log[1].toFixed(1) + " calls)" +
+        "\ngame  " + Math.max(cpu - gl[0] - audio[0] - log[0], 0).toFixed(1) + " ms";
+      [profile.gl, profile.audio].forEach(function (bucket) {
+        Object.keys(bucket).sort(function (x, y) { return bucket[y][0] - bucket[x][0]; }).slice(0, 4).forEach(function (k) {
+          text += "\n " + k + " " + (bucket[k][0] / frames).toFixed(2) + " ms x" + (bucket[k][1] / frames).toFixed(0);
+        });
+      });
+      profile.gl = {};
+      profile.audio = {};
+      profile.log = {};
+      profile.frames = 0;
+    }
+    m.el.textContent = text;
     m.intervals = [];
     m.cpu = [];
     m.gpu = [];
@@ -639,11 +624,21 @@
   if (/[?&]fps\b/.test(location.search)) {
     window.addEventListener("load", function () { Etg.toggleFrameMonitor(); });
   }
+  // ?fps=profile: the breakdown too, once the game's GL context exists
+  if (/[?&]fps=profile\b/.test(location.search)) {
+    var waitForGame = setInterval(function () {
+      if (Etg.game && Etg.game.Module && Etg.game.Module.ctx && window.EtgAudio) {
+        clearInterval(waitForGame);
+        Etg.toggleProfile();
+      }
+    }, 1000);
+  }
   window.addEventListener("keydown", function (e) {
-    if (e.key === "F3") {
+    if (e.key === "F3" || e.key === "F4") {
       e.preventDefault();
       e.stopImmediatePropagation();
-      Etg.toggleFrameMonitor();
+      if (e.key === "F3") Etg.toggleFrameMonitor();
+      else Etg.toggleProfile();
     }
   }, true);
 
