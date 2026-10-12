@@ -317,6 +317,11 @@ public static class EtgWebBuild
         string manifest = Path.Combine(Path.Combine(output, "Build"), Path.GetFileName(output) + ".json");
         if (!File.Exists(manifest) || File.GetLastWriteTime(manifest) < started)
         {
+            // A failed build leaves the previous one in webbuild/, which is easy to mistake for the new one.
+            EditorUtility.DisplayDialog("EtG Web: build failed",
+                "The WebGL player was not built; webbuild/ still has the previous build.\n\n" + report +
+                "\n\nDetails: %LOCALAPPDATA%\\Unity\\Editor\\Editor.log. A release build that runs out of memory "
+                + "needs port/patch_webgl_dedupe.py (README, Building).", "OK");
             throw new Exception("[EtG Web] Build failed: " + report);
         }
         if (!string.IsNullOrEmpty(report))

@@ -30,6 +30,7 @@ port/
   abtest.sh / abtest_report.py   the same frames in the editor on D3D11 and GLES, compared (port/README.md)
   variant-selection.sh / variant_selection.py   original variant inventory vs actual Unity branch selection
   setstack.py   increases the stack size of an exe (needed for asm2wasm)
+  patch_webgl_dedupe.py   lets 2017.4's WebGL release builds through (skips an out-of-memory step)
   package.json, tsconfig.json, globals.d.ts   type check of the page JS (see Building)
 ```
 
@@ -63,6 +64,14 @@ port/
    ```
    and put the copy in place of
    `<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/BuildTools/Emscripten_FastComp_Win/binaryen/bin/asm2wasm.exe`.
+
+   **Once, for release builds** (**5. Build WebGL Player (Release)**): their "Remove duplicate asm.js code"
+   step reads the ~800 MB asm.js fallback into one string and the editor runs out of memory (the build fails
+   and `webbuild/` keeps the previous development build). With Unity closed, as admin:
+   ```
+   python port/patch_webgl_dedupe.py "<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/UnityEditor.WebGL.Extensions.dll"
+   ```
+   (skips that step; the page runs the wasm build anyway; the original is kept as `.orig`).
 6. Open `ripped/ExportedProject` in Unity 2017.4.27f1 -> menu **EtG Web -> Do Everything (1-4)**
    (boot scene, WebGL 2 / wasm / .NET 2.0 settings, bundles, dev build into `webbuild/`).
    After that, when the port changes: `apply.sh` -> Ctrl+R in Unity -> **4. Build WebGL Player**.
