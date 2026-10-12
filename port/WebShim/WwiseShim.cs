@@ -14,7 +14,7 @@ namespace WebShim
     ///
     /// AkSoundEngine.IsInitialized() stays false, as before: the game then never auto-adds AkGameObj
     /// components, and the code paths that only run with a live Wwise stay off. Positions of objects
-    /// with playing 3D sounds and the listener (the main camera) are sent once per frame instead.
+    /// with playing 3D sounds and the listener (the game's AkAudioListener) are sent once per frame instead.
     /// Outside the WebGL player (editor Play Mode) everything here is a no-op.
     /// </summary>
     public static class WwiseShim
@@ -289,13 +289,52 @@ namespace WebShim
             EtgAudioUnregister(obj);
         }
 
+        private static Type s_listenerType;
+        private static Component s_listener;
+        private static float s_nextListenerLookup;
+
+        /// <summary>
+        /// Where Wwise's listener would be: the game's AkAudioListener (a "listener" object at the primary
+        /// player's feet, or on the GameManager when there is no player), found by name since WebShim can't
+        /// reference the game's assembly. The main camera until there is one.
+        /// </summary>
+        private static bool ListenerPosition(out Vector3 position)
+        {
+            if (s_listener == null && Time.unscaledTime >= s_nextListenerLookup)
+            {
+                s_nextListenerLookup = Time.unscaledTime + 0.5f;
+                if (s_listenerType == null)
+                {
+                    foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+                    {
+                        s_listenerType = asm.GetType("AkAudioListener");
+                        if (s_listenerType != null)
+                        {
+                            break;
+                        }
+                    }
+                }
+                if (s_listenerType != null)
+                {
+                    s_listener = UnityEngine.Object.FindObjectOfType(s_listenerType) as Component;
+                }
+            }
+            if (s_listener != null)
+            {
+                position = s_listener.transform.position;
+                return true;
+            }
+            Camera cam = Camera.main;
+            position = cam != null ? cam.transform.position : Vector3.zero;
+            return cam != null;
+        }
+
         /// <summary>Per-frame position updates and cleanup of destroyed objects (WwiseShimUpdater).</summary>
         internal static void LateTick()
         {
-            Camera cam = Camera.main;
-            if (cam != null)
+            Vector3 l;
+            if (ListenerPosition(out l))
             {
-                Vector3 l = cam.transform.position;
                 EtgAudioSetListener(l.x, l.y, l.z);
             }
 

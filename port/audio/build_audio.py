@@ -11,11 +11,14 @@ webbuild/StreamingAssets/webaudio when that exists):
   etg-audio.js  the engine (copied from port/audio)
   soundboard.html  a test page: post events, set switches/states/volumes without the game
   ir/<bus>.wav  impulse responses of bus effect chains (reverbs), measured by measure_ir.py
+  version.txt   build id the loader appends to every URL, so browsers don't keep stale files
 
 Media goes through vgmstream (Wwise ADPCM / Wwise Vorbis -> WAV) and ffmpeg (-> Opus); the
 encoded files are cached in port/build/audio/enc, so a re-run only rebuilds the JSON.
 """
 import argparse
+import hashlib
+import struct
 import concurrent.futures
 import json
 import os
@@ -134,6 +137,8 @@ def common(o):
     adv = o.get("adv")
     if adv and adv["max_inst"]:
         n["max"] = {"n": adv["max_inst"], "bits": adv["bits"]}
+    if adv and adv["bits2"] & 9:  # HDR envelope tracking: bit 0 overrides the parent's, bit 3 enables
+        n["hdr_env"] = [bool(adv["bits2"] & 1), bool(adv["bits2"] & 8)]
     if o.get("children"):
         n["children"] = o["children"]
     fx = [[f["index"], f["id"]] for f in o.get("fx", []) if f["id"]]
@@ -184,6 +189,10 @@ def export_node(o):
     elif t in ("bus", "auxbus"):
         if o.get("ducks"):
             n["ducks"] = o["ducks"]
+        if o["hdr_bits"] & 1:  # HDR bus (bit 1: exponential release)
+            p = o["props"]
+            n["hdr"] = {"threshold": rnd(p.get("hdr_threshold", 0.0)), "ratio": rnd(p.get("hdr_ratio", 1.0)),
+                        "release": rnd(p.get("hdr_release", 0.0)), "exp_release": bool(o["hdr_bits"] & 2)}
     return n
 
 
@@ -203,6 +212,41 @@ def export_action(a):
     if a.get("except"):
         out["except"] = a["except"]
     return out
+
+
+def write_version():
+    """version.txt: a hash of everything the browser loads, appended to its URLs (cache busting)."""
+    h = hashlib.sha1()
+    for dp, _, fns in sorted(os.walk(OUT)):
+        for fn in sorted(fns):
+            if fn.endswith(".meta") or fn == "version.txt":
+                continue
+            path = os.path.join(dp, fn)
+            st = os.stat(path)
+            h.update(f"{os.path.relpath(path, OUT)}:{st.st_size}:{st.st_mtime_ns}".encode())
+    with open(os.path.join(OUT, "version.txt"), "w") as f:
+        f.write(h.hexdigest()[:12])
+
+
+def hdr_envelope(wem_path, rate):
+    """The loudness envelope Wwise's HDR tracks, from the WEM's 'akd ' chunk: [[seconds, dB relative to
+    the loudest point]...]. Chunk: f32, f32, u32 count, f32 peak dB, count x (u32 sample, u16 attenuation dB)."""
+    data = open(wem_path, "rb").read()
+    p = 12
+    while p + 8 <= len(data):
+        tag, n = data[p:p + 4], struct.unpack_from("<I", data, p + 4)[0]
+        if tag == b"akd ":
+            count = struct.unpack_from("<I", data, p + 16)[0]
+            peak = struct.unpack_from("<f", data, p + 20)[0]
+            if 16 + 6 * count > n:
+                return None
+            points = []
+            for i in range(count):
+                pos, att = struct.unpack_from("<IH", data, p + 24 + 6 * i)
+                points.append([round(pos / rate, 3), round(-att - peak, 1)])
+            return points
+        p += 8 + n + (n & 1)
+    return None
 
 
 def read_names():
@@ -249,6 +293,9 @@ def main():
         entry = {"rate": meta["rate"], "channels": meta["channels"], "samples": meta["samples"]}
         if "loop_start" in meta:
             entry["loop"] = [meta["loop_start"], meta["loop_end"]]
+        env = hdr_envelope(os.path.join(CACHE, "wem", f"{mid}.wem"), meta["rate"])
+        if env:
+            entry["env"] = env
         if kinds.get(mid) == "music":
             dst = os.path.join(OUT, "music", f"{mid}.ogg")
             if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(src):
@@ -309,6 +356,7 @@ def main():
         shutil.copyfile(os.path.join(PORT, "audio", name), os.path.join(OUT, name))
     for name in ("Init.txt", "SFX.txt"):  # the soundboard lists switch/state names from these
         shutil.copyfile(os.path.join(BANKS, name), os.path.join(OUT, name))
+    write_version()
 
     total = sum(os.path.getsize(os.path.join(dp, fn)) for dp, _, fns in os.walk(OUT) for fn in fns if not fn.endswith(".meta"))
     print(f"   {len(events)} events, {len(nodes)} nodes, {len(packs)} packs, {total / 1e6:.1f} MB total")

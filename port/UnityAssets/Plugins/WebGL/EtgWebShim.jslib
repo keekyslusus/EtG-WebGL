@@ -40,11 +40,13 @@ mergeInto(LibraryManager.library, {
       return 0;
     };
     Module.etgAudio = audio;
+    // version.txt (written by build_audio.py) names the build of the audio files; every URL carries
+    // it, so an updated engine/bank is never taken from the browser cache.
+    var version = "";
     var script = document.createElement("script");
-    script.src = base + "etg-audio.js";
     script.onload = function () {
       var engine = window.EtgAudio;
-      engine.init(base);
+      engine.init(base, version);
       audio.engine = engine;
       for (var i = 0; i < audio.queue.length; i++) {
         engine[audio.queue[i][0]].apply(engine, audio.queue[i][1]);
@@ -56,7 +58,13 @@ mergeInto(LibraryManager.library, {
       audio.queue = [];
       audio.call = function () { return 0; };
     };
-    document.head.appendChild(script);
+    fetch(base + "version.txt", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.text() : ""; }, function () { return ""; })
+      .then(function (v) {
+        version = v.trim();
+        script.src = base + "etg-audio.js" + (version ? "?v=" + version : "");
+        document.head.appendChild(script);
+      });
   },
 
   EtgAudioPostEvent: function (eventId, obj, x, y, z) {

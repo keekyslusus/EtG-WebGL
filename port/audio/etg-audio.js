@@ -23,6 +23,7 @@
   const LATE_DROP = 0.3;                   // one-shots that would start this late are dropped
 
   let base = '';
+  let version = '';
   let data = null, nodes = null, events = null, media = null, names = {};
   let ctx = null, masterIn = null, analyser = null;
   let offline = null;                     // OfflineAudioContext while api.render() runs (tests)
@@ -238,14 +239,14 @@
       return;
     }
     if (p.vol) acc.vol += p.vol;
-    if (p.makeup) acc.vol += p.makeup;
+    if (p.makeup) acc.makeup += p.makeup;
     if (p.pitch) acc.pitch += p.pitch;
     if (p.lpf) acc.lpf += p.lpf;
     if (p.hpf) acc.hpf += p.hpf;
     if (p.busvol) acc.busvol += p.busvol;
   }
 
-  const newAcc = () => ({ vol: 0, pitch: 0, lpf: 0, hpf: 0, busvol: 0 });
+  const newAcc = () => ({ vol: 0, makeup: 0, pitch: 0, lpf: 0, hpf: 0, busvol: 0 });
 
   // --- busses ------------------------------------------------------------------------------
 
@@ -304,6 +305,52 @@
     updateBusses(0);
   }
 
+  // HDR busses (EtG: Dungeon, all sound effects). Wwise sets the top of a window by the loudest voice
+  // playing on the bus (its volume without make-up gain) and attenuates every voice by
+  // top * (1 - 1/ratio), the top being at least the threshold: with EtG's ratio of 50 and threshold of
+  // -15 dB the loudest sound plays at about its make-up gain whatever its volume (down to -15 dB),
+  // quieter ones relative to it. A louder voice moves the window at once,
+  // when it ends the window falls back over the release time. Fitted to the real Wwise with audiodiff.
+  function hdrBusOf(busId) {
+    for (let b = busses.get(busId); b; b = busses.get(b.parent)) {
+      if (nodes[b.id].hdr) return b.id;
+    }
+    return 0;
+  }
+
+  // Follows the envelopes of the voices on every HDR bus (offline renders call it every step).
+  function hdrTick() {
+    if (!ctx) return;
+    for (const [id, b] of busses) {
+      if (b.hdrTop !== undefined) updateHdr(id, ctx.currentTime);
+    }
+  }
+
+  function updateHdr(busId, at) {
+    const b = busses.get(busId);
+    const h = nodes[busId].hdr;
+    if (!b || !h) return;
+    let top = -Infinity;
+    const t = Math.max(at, ctx.currentTime);
+    for (const v of voices) {
+      if (v.hdrBus === busId && !v.stopped && v.hdrLevel !== undefined) top = Math.max(top, v.hdrLevelAt(t));
+    }
+    if (top === -Infinity) return; // nothing playing: the next voice moves the window
+    top = Math.max(top, h.threshold); // the window never goes below the threshold
+    const gain = dbToGain(-top * (1 - 1 / Math.max(h.ratio, 1)));
+    const param = b.input.gain;
+    const now = ctx.currentTime;
+    at = Math.max(at, now);
+    if (b.hdrTop === undefined || top >= b.hdrTop) {
+      param.cancelScheduledValues(at);
+      param.setValueAtTime(gain, at);
+    } else {
+      param.cancelScheduledValues(at);
+      param.setTargetAtTime(gain, at, Math.max(h.release, 0.01) / 3);
+    }
+    b.hdrTop = top;
+  }
+
   // Wwise Parametric EQ filter types -> BiquadFilterNode types
   const EQ_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch', 'lowshelf', 'highshelf', 'peaking'];
 
@@ -360,7 +407,7 @@
     for (const b of busses.values()) {
       const acc = newAcc();
       accumulate(acc, b.id, -1);
-      const gain = dbToGain(acc.vol + acc.busvol);
+      const gain = dbToGain(acc.vol + acc.makeup + acc.busvol);
       approach(b.output.gain, gain, fade, 0.01);
       approach(b.filter.frequency, acc.lpf > 0 ? lpfToHz(acc.lpf) : 22000, fade, 0.05);
     }
@@ -378,7 +425,7 @@
   async function fetchBuffer(path) {
     for (let attempt = 0; ; attempt++) {
       try {
-        const r = await fetch(base + path);
+        const r = await fetch(base + path + (version ? '?v=' + version : ''));
         if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
         return await r.arrayBuffer();
       } catch (e) {
@@ -490,7 +537,7 @@
         const r = nodes[id].ranged;
         if (r) {
           if (r.vol) this.random.vol += rand(r.vol[0], r.vol[1]);
-          if (r.makeup) this.random.vol += rand(r.makeup[0], r.makeup[1]);
+          if (r.makeup) this.random.makeup += rand(r.makeup[0], r.makeup[1]);
           if (r.pitch) this.random.pitch += rand(r.pitch[0], r.pitch[1]);
           if (r.lpf) this.random.lpf += rand(r.lpf[0], r.lpf[1]);
           if (r.hpf) this.random.hpf += rand(r.hpf[0], r.hpf[1]);
@@ -507,6 +554,8 @@
       this.fadeIn = pc.fadeIn || 0;
       this.mediaId = nodes[soundId].media;
       this.priority = priorityOf(this.chain);
+      this.hdrBus = hdrBusOf(this.bus);
+      if (this.hdrBus) this.setupEnvelope();
       this.serial = voiceSerial++;
       voices.add(this);
     }
@@ -517,6 +566,7 @@
         accumulate(acc, id, this.obj);
       }
       acc.vol += this.random.vol;
+      acc.makeup += this.random.makeup;
       acc.pitch += this.random.pitch;
       acc.lpf += this.random.lpf;
       acc.hpf += this.random.hpf;
@@ -526,25 +576,74 @@
       return acc;
     }
 
-    attenuation() {
-      const att = nodes[this.pos.att];
-      if (!att || att.uses[0] === 255) {
-        return 0;
+    // HDR envelope tracking: the nearest node overriding the HDR settings decides (else the sound's
+    // own flag); the active range (prop 33) limits how far the tracked level drops below the peak.
+    setupEnvelope() {
+      let enabled = false, decided = false, range;
+      for (const id of this.chain) {
+        const n = nodes[id];
+        if (!decided && n.hdr_env && (n.hdr_env[0] || id === this.id)) {
+          enabled = n.hdr_env[1];
+          if (n.hdr_env[0]) decided = true;
+        }
+        if (range === undefined && n.props && n.props['33'] !== undefined) range = n.props['33'];
       }
-      const curve = att.curves[att.uses[0]];
-      return curve ? evalCurve(curve.points, this.distance(), curve.scaling) : 0;
+      const m = media[this.mediaId];
+      this.env = enabled && m && m.env ? m.env : null;
+      this.envRange = range === undefined ? 12 : range;
+    }
+
+    // Volume Wwise's HDR sees right now: the voice's volume plus its tracked envelope.
+    hdrLevelAt(t) {
+      if (!this.env || !this.started || !this.buffer) return this.hdrLevel;
+      let pos = (t - this.startedAt) * this.src.playbackRate.value;
+      if (pos < 0) pos = 0;
+      if (this.loops !== 1) pos %= this.buffer.duration;
+      const e = this.env;
+      let v = e[e.length - 1][1];
+      for (let i = 1; i < e.length; i++) {
+        if (pos < e[i][0]) {
+          const a = e[i - 1], b = e[i];
+          v = a[1] + (b[1] - a[1]) * ((pos - a[0]) / (b[0] - a[0] || 1));
+          break;
+        }
+      }
+      return this.hdrLevel + Math.max(v, -this.envRange);
+    }
+
+    // Curve of the voice's attenuation for one use (0 dry volume, 5 spread...), at the current distance.
+    attenuationCurve(use) {
+      const att = nodes[this.pos.att];
+      if (!att || att.uses[use] === 255) return null;
+      const curve = att.curves[att.uses[use]];
+      return curve ? evalCurve(curve.points, this.distance(), curve.scaling) : null;
+    }
+
+    attenuation() {
+      return this.attenuationCurve(0) || 0;
+    }
+
+    // Emitter relative to the listener, in Wwise's frame: x right, y up, z forward (the listener is
+    // not rotated: in EtG it is a child of the player, which never turns).
+    relative() {
+      const o = objects.get(this.obj);
+      if (!o) return null;
+      return [o.x - listener.x, o.y - listener.y, (o.z || 0) - (listener.z || 0)];
     }
 
     distance() {
-      const o = objects.get(this.obj);
-      if (!o) return 0;
-      return Math.hypot(o.x - listener.x, o.y - listener.y);
+      const d = this.relative();
+      return d ? Math.hypot(d[0], d[1], d[2]) : 0;
     }
 
+    // Stereo position like Wwise's 3D panning: the azimuth on the horizontal (x/z) plane gives the
+    // direction, the attenuation's spread curve (0-100 %) widens the source towards the centre.
     pan() {
-      const o = objects.get(this.obj);
-      if (!o) return 0;
-      return clamp((o.x - listener.x) / 16, -0.8, 0.8);
+      const d = this.relative();
+      if (!d || (d[0] === 0 && d[2] === 0)) return 0;
+      const spread = this.attenuationCurve(5);
+      const width = spread === null ? 0 : clamp(spread / 100, 0, 1);
+      return clamp((d[0] / Math.hypot(d[0], d[2])) * (1 - width), -1, 1);
     }
 
     start(buffer) {
@@ -572,7 +671,7 @@
       }
       let out = src;
       const p = this.params();
-      if (p.vol < volumeThreshold && this.loops === 1) { // inaudible one-shot: Wwise makes it virtual
+      if (p.vol + p.makeup < volumeThreshold && this.loops === 1) { // inaudible one-shot: Wwise makes it virtual
         this.finish();
         return;
       }
@@ -603,7 +702,11 @@
       out.connect(busInput(this.bus));
       src.playbackRate.value = centsToRate(p.pitch);
       const at = Math.max(this.when, now);
-      const target = dbToGain(p.vol);
+      if (this.hdrBus) {
+        this.hdrLevel = p.vol;
+        updateHdr(this.hdrBus, at);
+      }
+      const target = dbToGain(p.vol + p.makeup);
       if (this.fadeIn > 0) {
         this.gain.gain.setValueAtTime(0, at);
         this.gain.gain.linearRampToValueAtTime(target, at + this.fadeIn / 1000);
@@ -634,7 +737,11 @@
         return;
       }
       const p = this.params();
-      if (!this.fadingOut) approach(this.gain.gain, dbToGain(p.vol), fade, 0.02);
+      if (!this.fadingOut) approach(this.gain.gain, dbToGain(p.vol + p.makeup), fade, 0.02);
+      if (this.hdrBus) {
+        this.hdrLevel = p.vol;
+        updateHdr(this.hdrBus, ctx.currentTime);
+      }
       approach(this.src.playbackRate, centsToRate(p.pitch), fade, 0.02);
       if (this.lpf) approach(this.lpf.frequency, p.lpf > 0 ? lpfToHz(p.lpf) : 22000, fade, 0.02);
       if (this.hpf) approach(this.hpf.frequency, p.hpf > 0 ? hpfToHz(p.hpf) : 10, fade, 0.02);
@@ -700,6 +807,7 @@
       this.finished = true;
       this.stopped = true;
       voices.delete(this);
+      if (this.hdrBus && this.hdrLevel !== undefined) updateHdr(this.hdrBus, ctx.currentTime);
       if (this.buffer) {
         const e = buffers.get(this.mediaId);
         if (e) e.refs--;
@@ -1267,7 +1375,7 @@
     volume(tid) {
       const acc = newAcc();
       for (const id of chainOf(tid)) accumulate(acc, id, this.inst.obj);
-      return acc.vol;
+      return acc.vol + acc.makeup;
     }
 
     update(fade) {
@@ -1753,6 +1861,7 @@
         timers.sort((a, b) => a.t - b.t);
         while (timers.length && timers[0].t <= now + 1e-9) timers.shift().fn();
         Music.tick();
+        hdrTick();
         await settle();
       };
       const stepAt = (time) => {
@@ -1780,9 +1889,11 @@
     },
     debug: { voices, busses, stateValues, switchValues, rtpcGlobal, objects, listener, buffers, nodes: () => nodes, events: () => events, names: () => names },
 
-    init(baseUrl) {
+    // version: build id from version.txt (cache busting); optional
+    init(baseUrl, buildVersion) {
       if (ctx) return;
       base = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
+      version = buildVersion || '';
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       const unlock = () => {
         if (offline) return;
@@ -1809,6 +1920,7 @@
           buildBusses();
           loadPacks();
           setInterval(() => { if (!offline) Music.tick(); }, 100);
+          setInterval(() => { if (!offline) hdrTick(); }, 25);
           console.log(LOG, 'ready:', Object.keys(events).length, 'events,', Object.keys(nodes).length, 'nodes');
           onLoaded();
         })

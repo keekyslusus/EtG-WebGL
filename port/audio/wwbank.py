@@ -18,7 +18,7 @@ HIRC_TYPES = {
 PROPS = {
     0x00: "vol", 0x02: "pitch", 0x03: "lpf", 0x04: "hpf", 0x05: "busvol", 0x06: "makeup", 0x07: "priority",
     0x0F: "delay", 0x10: "transition", 0x11: "prob", 0x18: "outbusvol", 0x3A: "loop",
-    0x3B: "idelay",
+    0x3B: "idelay", 0x1B: "hdr_threshold", 0x1C: "hdr_ratio", 0x1D: "hdr_release",
 }
 INT_PROPS = {"transition", "delay", "loop"}
 
