@@ -24,6 +24,8 @@ port/
   Patcher/      Mono.Cecil patcher for the game DLLs + `verify` (checks references against the WebGL libraries)
   UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib
   ShaderDiff/   differential test of the decompiled shaders against the game's DX11 bytecode (see below)
+  audio/        sound: Wwise banks -> Web Audio engine (etg-audio.js), its build and tests (port/README.md, Sound)
+  WwiseRef/     renders test scripts with the game's own Wwise DLL offline (the reference for audio/)
   apply.sh      builds WebShim/Patcher, patches the DLLs, installs everything into the project
   decompile_shaders.sh / fix_shaders.py / shaderdiff.sh   shader decompilation, gles3 fix-ups, testing
   abtest.sh / abtest_report.py   the same frames in the editor on D3D11 and GLES, compared (port/README.md)
@@ -48,6 +50,8 @@ port/
    Patches the DLLs, renames `Assembly-CSharp*` → `EtgGame*` (keeping GUIDs),
    replaces the stub shaders with the decompiled ones, removes Windows bundles and Wwise banks
    from StreamingAssets, verifies references.
+   Sound: `python port/audio/build_audio.py` (needs [vgmstream](https://github.com/vgmstream/vgmstream) in
+   `tools/vgmstream` and ffmpeg on PATH) converts the Wwise banks into `StreamingAssets/webaudio`.
 5. **Once**: `asm2wasm` from Unity 2017 crashes with a stack overflow on a large assembly.
    Increase its stack size (requires admin rights, the original is kept as `.orig`):
    ```
@@ -96,7 +100,8 @@ The game ships its shaders only as DX11 bytecode (DXBC). USCSandbox decompiles t
 
 ## Limitations
 
-- **No sound**: Wwise is native, banks are for Windows. Plan — a shim `AkSoundEngine.PostEvent` → `AudioSource`.
+- Sound is not Wwise but a re-implementation on Web Audio (`port/audio`, see *Sound* in `port/README.md`):
+  differences from the game remain, measured by `port/audio/audiodiff.py`.
 - WebGL 2 only (the decompiled shaders don't compile for WebGL 1).
 - Floor generation is single-threaded — slower than on PC.
 - Game ownership verification (Steam sign-in) isn't implemented yet.

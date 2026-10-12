@@ -231,6 +231,20 @@ def write_version():
         f.write(h.hexdigest()[:12])
 
 
+def float_wav_to_pcm16(src, dst):
+    """measure_ir.py's float WAV -> 16-bit PCM scaled to full scale; returns the scale (the original peak)."""
+    data = open(src, "rb").read()
+    channels, rate = struct.unpack_from("<HI", data, 22)
+    n = struct.unpack_from("<I", data, 40)[0] // 4
+    samples = struct.unpack_from(f"<{n}f", data, 44)
+    peak = max(abs(v) for v in samples) or 1.0
+    pcm = struct.pack(f"<{n}h", *(int(round(v / peak * 32767)) for v in samples))
+    header = b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " + struct.pack("<IHHIIHH", 16, 1, channels, rate, rate * 2 * channels, 2 * channels, 16)
+    with open(dst, "wb") as f:
+        f.write(header + b"data" + struct.pack("<I", len(pcm)) + pcm)
+    return peak
+
+
 def hdr_envelope(wem_path, rate):
     """The loudness envelope Wwise's HDR tracks, from the WEM's 'akd ' chunk: [[seconds, dB relative to
     the loudest point]...]. Chunk: f32, f32, u32 count, f32 peak dB, count x (u32 sample, u16 attenuation dB)."""
@@ -347,11 +361,31 @@ def main():
     if os.path.isdir(ir_dir):
         os.makedirs(os.path.join(OUT, "ir"), exist_ok=True)
         for fn in sorted(os.listdir(ir_dir)):
-            if fn.endswith(".wav"):
+            if fn.endswith(".wav") and not fn.startswith("fx"):
                 shutil.copyfile(os.path.join(ir_dir, fn), os.path.join(OUT, "ir", fn))
                 reverbs[fn[:-4]] = f"ir/{fn}"
     if not reverbs:
         print("   no measured bus reverbs (port/build/audio/ir) - run measure_ir.py; sound effects will be dry")
+
+    # Effects on sounds, measured by measure_fx.py: reverb tails (ir/fx<id>.wav, shipped as 16-bit, peak
+    # normalized: ir_gain restores the level) and the fitted models of the other plugins (fx_models.json).
+    fx_irs = os.path.join(ir_dir, "fx.json")
+    if os.path.exists(fx_irs):
+        for fid, fn in json.load(open(fx_irs)).items():
+            if fid in effects:
+                effects[fid].update(ir=f"ir/{fn}", ir_gain=round(float_wav_to_pcm16(os.path.join(ir_dir, fn), os.path.join(OUT, "ir", fn)), 6))
+    fx_models = os.path.join(ir_dir, "fx_models.json")
+    if os.path.exists(fx_models):
+        for fid, m in json.load(open(fx_models)).items():
+            e = effects.get(fid)
+            if not e or "none" in m:
+                continue
+            if e["plugin"] == "guitar_distortion":
+                e["model"] = m
+            else:
+                e.update(m)
+    if not (os.path.exists(fx_irs) and os.path.exists(fx_models)):
+        print("   no measured effects on sounds (port/build/audio/ir/fx*.json) - run measure_fx.py render, ir, fit")
 
     doc = {"version": 1, "settings": init["settings"], "effects": effects, "reverbs": reverbs, "packs": packs, "media": media, "events": events, "nodes": nodes,
            "names": {str(k): v for k, v in read_names().items()}}

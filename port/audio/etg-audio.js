@@ -8,9 +8,11 @@
 // Implemented: Play/Stop/Pause/Resume/SetState/SetSwitch/SetGameParameter/Set* actions, random and
 // sequence containers (weights, avoid-repeat, shuffle, step and continuous), switch containers, blend
 // containers (all layers), volume/pitch/LPF/HPF including randomizers, state and RTPC offsets,
-// bus hierarchy, max instances, 2D distance attenuation and panning, interactive music (switch and
-// playlist containers, segments, transition rules). Not implemented: effects (reverb, EQ), aux
-// sends, ducking, blend crossfade curves, music stingers (EtG has none).
+// bus hierarchy, HDR, max instances, 3D attenuation and panning, aux sends, interactive music (switch and
+// playlist containers, segments, transition rules), effects: Parametric EQ and Delay from their parameters,
+// bus reverbs as measured impulse responses, the effects on sounds (distortion, flanger, tremolo,
+// harmonizer, reverbs) as models measured in Wwise (measure_ir.py, measure_fx.py). Not implemented:
+// ducking, blend crossfade curves, music stingers (EtG has none).
 (function () {
   'use strict';
 
@@ -27,6 +29,7 @@
   let data = null, nodes = null, events = null, media = null, names = {};
   let ctx = null, masterIn = null, analyser = null;
   let offline = null;                     // OfflineAudioContext while api.render() runs (tests)
+  let nodeFxOff = false, busFxOff = false; // test switches: render without the effects on sounds / on busses
   let random = Math.random;
   let timers = [];                        // offline: [{t, fn}] on the context clock
   const inflight = new Set();             // decodes in progress (offline rendering waits for them)
@@ -282,7 +285,7 @@
 
     for (const id in nodes) {
       const n = nodes[id];
-      const ir = data.reverbs && data.reverbs[id];
+      const ir = !busFxOff && data.reverbs && data.reverbs[id];
       // Aux busses only exist as their measured effect (Foyer, Dimension...); the others add nothing.
       if (n.type !== 'bus' && !(n.type === 'auxbus' && ir)) {
         continue;
@@ -296,7 +299,7 @@
       input.connect(filter);
       // A measured impulse response stands for the bus's whole effect chain; otherwise its EQs. An
       // aux bus stays silent until its response is loaded (its direct signal would double the sound).
-      const last = ir ? filter : effectChain(n.fx, filter);
+      const last = ir ? filter : effectChain(busFxOff ? null : n.fx, filter);
       if (!aux) last.connect(output);
       if (ir) loadReverb(ir, last, output);
       busses.set(+id, { id: +id, input, filter, output, parent: n.parent, aux });
@@ -357,14 +360,25 @@
   // Wwise Parametric EQ filter types -> BiquadFilterNode types
   const EQ_TYPES = ['lowpass', 'highpass', 'bandpass', 'notch', 'lowshelf', 'highshelf', 'peaking'];
 
-  // Appends the supported effects of an fx list ([[index, effect id]...]) after `node`; returns the
-  // last node. Parametric EQs become biquads, Delay a feedback delay line; the other plugins
-  // (distortion, flanger, harmonizer, tremolo, compressor) are skipped.
-  function effectChain(fx, node) {
+  // Appends the effects of an fx list ([[index, effect id]...]) that run inside a voice (or a bus) after
+  // `node`; returns the last node. Parametric EQs become biquads, Delay a feedback delay line, Guitar
+  // Distortion and Tremolo their measured models (`voice` gets the tremolo's oscillator to start). The
+  // reverbs and flangers on sounds run in shared networks (sharedEffectOf), the Harmonizer as extra sources
+  // (Voice.start). The Compressors change nothing measurable in Wwise on EtG's sounds (measure_fx.py).
+  function effectChain(fx, node, voice) {
     if (!fx) return node;
     for (const [, id] of fx) {
       const e = data.effects && data.effects[id];
       if (!e) continue;
+      if (nodeFxOff && voice && (e.plugin === 'guitar_distortion' || e.plugin === 'tremolo')) continue;
+      if (e.plugin === 'guitar_distortion' && e.model) {
+        node = distortion(id, e.model, node);
+        continue;
+      }
+      if (e.plugin === 'tremolo' && e.table && voice) {
+        node = tremolo(id, e, node, voice);
+        continue;
+      }
       if (e.plugin === 'parametric_eq') {
         for (const band of e.bands) {
           if (!band.on || EQ_TYPES[band.type] === undefined) continue;
@@ -408,6 +422,182 @@
     return node;
   }
 
+
+  // First-order bilinear low/high-pass, the filters the measured models were fitted with.
+  function onePole(fc, kind) {
+    const w = Math.tan(Math.PI * Math.min(fc, ctx.sampleRate * 0.49) / ctx.sampleRate);
+    const a1 = (w - 1) / (1 + w);
+    return kind === 'lp'
+      ? ctx.createIIRFilter([w / (1 + w), w / (1 + w)], [1, a1])
+      : ctx.createIIRFilter([1 / (1 + w), -1 / (1 + w)], [1, a1]);
+  }
+
+  // Guitar Distortion as measured in Wwise (measure_fx.py; all of EtG's are Overdrive):
+  //   dry * x + wet * hp_post(lp_tone(shape(k * hp_pre(x)) / k)),  shape(v) = v / (1 + |v|^knee)^(1/knee)
+  // with rectification blending |shape| in. The shaper's input is k * x / SHAPE_RANGE: beyond the range
+  // the curve is flat, as the clipper is.
+  const SHAPE_RANGE = 8;
+  const shaperCurves = new Map(); // effect id -> Float32Array
+  function distortion(id, m, node) {
+    let curve = shaperCurves.get(id);
+    if (!curve) {
+      curve = new Float32Array(8193);
+      for (let i = 0; i < curve.length; i++) {
+        const v = SHAPE_RANGE * (2 * i / (curve.length - 1) - 1);
+        let s = v / Math.pow(1 + Math.pow(Math.abs(v), m.knee), 1 / m.knee);
+        s += m.rect * (Math.abs(s) - s);
+        curve[i] = s / m.k;
+      }
+      shaperCurves.set(id, curve);
+    }
+    const sum = ctx.createGain();
+    const dry = ctx.createGain();
+    dry.gain.value = m.dry;
+    node.connect(dry);
+    dry.connect(sum);
+    let s = node;
+    if (m.hp_pre > 2) {
+      const hp = onePole(m.hp_pre, 'hp');
+      s.connect(hp);
+      s = hp;
+    }
+    const drive = ctx.createGain();
+    drive.gain.value = m.k / SHAPE_RANGE;
+    s.connect(drive);
+    const shaper = ctx.createWaveShaper();
+    shaper.curve = curve;
+    shaper.oversample = '2x';
+    drive.connect(shaper);
+    let z = shaper;
+    if (m.tone < 20000) {
+      const lp = onePole(m.tone, 'lp');
+      z.connect(lp);
+      z = lp;
+    }
+    const hp = onePole(m.hp_post, 'hp');
+    z.connect(hp);
+    const wet = ctx.createGain();
+    wet.gain.value = m.wet;
+    hp.connect(wet);
+    wet.connect(sum);
+    return sum;
+  }
+
+  // A PeriodicWave of one period of fn(phase) (phase 0..1), not normalized: an OscillatorNode with it
+  // starts at phase 0 when started.
+  const waves = new Map();
+  function periodicWave(key, fn, harmonics) {
+    let w = waves.get(key);
+    if (w && w.ctx === ctx) return w.wave;
+    const n = 1024, re = new Float32Array(harmonics + 1), im = new Float32Array(harmonics + 1);
+    for (let k = 1; k <= harmonics; k++) {
+      for (let i = 0; i < n; i++) {
+        const v = fn(i / n), a = 2 * Math.PI * k * i / n;
+        re[k] += (2 / n) * v * Math.cos(a);
+        im[k] += (2 / n) * v * Math.sin(a);
+      }
+    }
+    w = { ctx, wave: ctx.createPeriodicWave(re, im, { disableNormalization: true }) };
+    waves.set(key, w);
+    return w.wave;
+  }
+
+  // Wwise LFO waveforms: 0 sine, 1 triangle, 2 square, 3 saw up, 4 saw down.
+  function lfoShape(wave) {
+    switch (wave) {
+      case 1: return (p) => 1 - 4 * Math.abs(p - 0.5);
+      case 2: return (p) => (p < 0.5 ? 1 : -1);
+      case 3: return (p) => 2 * p - 1;
+      case 4: return (p) => 1 - 2 * p;
+      default: return (p) => Math.sin(2 * Math.PI * p);
+    }
+  }
+
+  // Tremolo: the voice's gain follows the measured period (Wwise's LFO after its smoothing), from the
+  // voice's start. One oscillator per voice, started and stopped with it.
+  function tremolo(id, e, node, voice) {
+    const mean = e.table.reduce((a, b) => a + b, 0) / e.table.length;
+    const n = e.table.length;
+    const wave = periodicWave('trem' + id, (p) => {
+      const x = p * n, i = Math.floor(x) % n, f = x - Math.floor(x);
+      return e.table[i] * (1 - f) + e.table[(i + 1) % n] * f - mean;
+    }, 32);
+    const g = ctx.createGain();
+    g.gain.value = mean;
+    const osc = ctx.createOscillator();
+    osc.setPeriodicWave(wave);
+    osc.frequency.value = e.freq;
+    osc.connect(g.gain);
+    voice.lfos.push(osc);
+    node.connect(g);
+    return g;
+  }
+
+  // Reverbs and flangers on sounds: linear, so the voices of one effect (and destination) are summed into
+  // one shared network instead of a convolver or a delay network per voice. A voice sends its output there
+  // and keeps a direct path scaled by `direct`; tails ring on after the voice is gone.
+  const sharedNets = new Map(); // effect id | destinations -> {input, direct}
+  function sharedEffectOf(chain) {
+    if (nodeFxOff) return 0;
+    for (const id of chain) {
+      for (const [, fxId] of nodes[id].fx || []) {
+        const e = data.effects && data.effects[fxId];
+        if (e && (e.ir || (e.plugin === 'flanger' && e.center !== undefined))) return fxId;
+      }
+    }
+    return 0;
+  }
+
+  function sharedNet(fxId, dests, destKey) {
+    const key = fxId + '|' + destKey;
+    let net = sharedNets.get(key);
+    if (net) return net;
+    const e = data.effects[fxId];
+    const input = ctx.createGain(), output = ctx.createGain();
+    for (const d of dests) output.connect(d);
+    net = { input, direct: 1 };
+    if (e.ir) {
+      // the measured tail (measure_fx.py), stored peak-normalized: ir_gain restores its level
+      input.gain.value = e.ir_gain || 1;
+      loadReverb(e.ir, input, output);
+    } else {
+      // Universal comb (Wwise's dry / feed-forward / feedback levels), delay D(t) = delay * (center +
+      // swing * lfo). The feedback loop is unrolled into taps x(t - k D(t)) * fb^(k-1): a DelayNode in a
+      // cycle can't be shorter than a render quantum (2.7 ms), the flangers' delays are 0.25-5 ms.
+      // Wwise starts the LFO with each voice (at the measured phase); here every new voice restarts it.
+      const mix = e.mix / 100, d = e.delay / 1000;
+      net.direct = 1 - mix + mix * e.dry;
+      const depths = [];
+      const shape = lfoShape(e.wave), phase = e.phase || 0;
+      const wave = periodicWave('lfo' + fxId, (p) => shape((p + phase) % 1), 24);
+      let lfo = null;
+      net.restart = (at) => {
+        if (lfo) lfo.stop(at);
+        lfo = ctx.createOscillator();
+        lfo.setPeriodicWave(wave);
+        lfo.frequency.value = e.freq;
+        for (const g of depths) lfo.connect(g);
+        lfo.start(at);
+      };
+      const taps = e.fb > 0.001 ? Math.min(16, Math.ceil(Math.log(0.03) / Math.log(e.fb))) : 1;
+      for (let k = 1; k <= taps; k++) {
+        const delay = ctx.createDelay(k * d * (Math.abs(e.center) + Math.abs(e.swing)) + 0.01);
+        delay.delayTime.value = Math.max(k * d * e.center, 0);
+        const depth = ctx.createGain();
+        depth.gain.value = k * d * e.swing;
+        depths.push(depth);
+        depth.connect(delay.delayTime);
+        const g = ctx.createGain();
+        g.gain.value = mix * (e.dry * e.fb + e.ff) * Math.pow(e.fb, k - 1);
+        input.connect(delay);
+        delay.connect(g);
+        g.connect(output);
+      }
+      net.restart(ctx.currentTime);
+    }
+    sharedNets.set(key, net);
+    return net;
+  }
 
   // Seconds an effect chain keeps sounding after its input stops (echoes down to -60 dB, at most 4 s).
   function effectTail(chain) {
@@ -595,8 +785,12 @@
         const p = nodes[id].props;
         if (p && p.idelay) delay += p.idelay;
       }
+      this.harm = harmonizerOf(this.chain);
+      if (this.harm) delay += this.harm.latency / 48000; // Wwise delays dry and voices by its window
       this.when = ctx.currentTime + delay;
       this.fadeIn = pc.fadeIn || 0;
+      this.lfos = [];
+      this.copies = [];
       this.mediaId = nodes[soundId].media;
       this.priority = priorityOf(this.chain);
       this.hdrBus = hdrBusOf(this.bus);
@@ -724,6 +918,28 @@
       }
       let out = src;
       const p = this.params();
+      const h = this.harm;
+      if (h) {
+        // Harmonizer: the voices as copies of the source at their pitch, into the same chain as the dry
+        const head = ctx.createGain();
+        const dry = ctx.createGain();
+        dry.gain.value = dbToGain(h.dry);
+        src.connect(dry);
+        dry.connect(head);
+        for (const [cents, gainDb] of h.voices) {
+          const c = ctx.createBufferSource();
+          c.buffer = buffer;
+          c.loop = src.loop;
+          c.loopStart = src.loopStart;
+          c.loopEnd = src.loopEnd;
+          const g = ctx.createGain();
+          g.gain.value = dbToGain(h.wet + gainDb) * h.calib;
+          c.connect(g);
+          g.connect(head);
+          this.copies.push({ src: c, gain: g, ratio: centsToRate(cents) });
+        }
+        out = head;
+      }
       if (p.vol + p.makeup < volumeThreshold && this.loops === 1) { // inaudible one-shot: Wwise makes it virtual
         this.finish();
         return;
@@ -742,7 +958,7 @@
         out.connect(this.hpf);
         out = this.hpf;
       }
-      for (const id of this.chain) out = effectChain(nodes[id].fx, out); // sound first, then its parents
+      for (const id of this.chain) out = effectChain(nodes[id].fx, out, this); // sound first, then its parents
       this.fxTail = effectTail(this.chain);
       this.gain = ctx.createGain();
       out.connect(this.gain);
@@ -753,12 +969,30 @@
         out.connect(this.panner);
         out = this.panner;
       }
-      out.connect(busInput(this.bus));
+      const dests = [busInput(this.bus)];
+      let destKey = String(this.bus);
       for (const auxId of this.auxSends()) {
         const b = busses.get(auxId);
-        if (b && b.aux) out.connect(b.input); // user aux send, 0 dB
+        if (b && b.aux) { // user aux send, 0 dB
+          dests.push(b.input);
+          destKey += ',' + auxId;
+        }
       }
+      const shared = sharedEffectOf(this.chain);
+      if (shared) {
+        const net = sharedNet(shared, dests, destKey);
+        if (net.restart) net.restart(Math.max(this.when, now));
+        out.connect(net.input);
+        if (net.direct !== 1) {
+          this.direct = ctx.createGain();
+          this.direct.gain.value = net.direct;
+          out.connect(this.direct);
+          out = this.direct;
+        }
+      }
+      for (const d of dests) out.connect(d);
       src.playbackRate.value = centsToRate(p.pitch);
+      for (const c of this.copies) c.src.playbackRate.value = src.playbackRate.value * c.ratio;
       const at = Math.max(this.when, now);
       if (this.hdrBus) {
         this.hdrLevel = p.vol;
@@ -785,6 +1019,19 @@
       if (this.loops > 1) {
         src.stop(at + buffer.duration * this.loops - offset);
       }
+      for (const osc of this.lfos) osc.start(at);
+      for (const c of this.copies) {
+        c.src.start(at, offset);
+        if (this.loops === 1) {
+          // Wwise's pitch shifter keeps time, a copy at another rate doesn't: it follows the dry's envelope
+          // instead of its own and ends with the dry
+          const dur = (buffer.duration - offset) / src.playbackRate.value;
+          if (dur > 0.02) c.gain.gain.setValueCurveAtTime(copyEnvelope(this.mediaId, buffer, offset, c.ratio, dur, c.gain.gain.value), at, dur);
+          c.src.stop(at + dur);
+        } else if (this.loops > 1) {
+          c.src.stop(at + (buffer.duration * this.loops - offset) / src.playbackRate.value);
+        }
+      }
       this.startedAt = at - offset;
       this.src = src;
       this.started = true;
@@ -801,6 +1048,7 @@
         updateHdr(this.hdrBus, ctx.currentTime);
       }
       approach(this.src.playbackRate, centsToRate(p.pitch), fade, 0.02);
+      for (const c of this.copies) approach(c.src.playbackRate, centsToRate(p.pitch) * c.ratio, fade, 0.02);
       if (this.lpf) approach(this.lpf.frequency, p.lpf > 0 ? lpfToHz(p.lpf) : 22000, fade, 0.02);
       if (this.hpf) approach(this.hpf.frequency, p.hpf > 0 ? hpfToHz(p.hpf) : 10, fade, 0.02);
       if (this.panner) approach(this.panner.pan, this.pan(), 0, 0.02);
@@ -823,6 +1071,7 @@
       this.fadingOut = true;
       try {
         this.src.stop(t + fade);
+        for (const c of this.copies) c.src.stop(t + fade);
       } catch (e) {
         this.finish();
       }
@@ -841,8 +1090,21 @@
         this.src = null;
         src.onended = null;
         src.stop();
+        this.stopExtras();
         this.started = false;
       }
+    }
+
+    // Harmonizer copies and tremolo oscillators (start() makes new ones).
+    stopExtras() {
+      for (const n of this.lfos.concat(this.copies.map((c) => c.src))) {
+        try {
+          n.stop();
+        } catch (e) { /* never started */ }
+        n.disconnect();
+      }
+      this.lfos = [];
+      this.copies = [];
     }
 
     resume() {
@@ -873,8 +1135,9 @@
       for (const n of [this.src, this.lpf, this.hpf]) {
         if (n) n.disconnect();
       }
+      this.stopExtras();
       // an echo keeps ringing after the sound ends, as in Wwise
-      const out = [this.gain, this.panner];
+      const out = [this.gain, this.panner, this.direct];
       const cut = () => out.forEach((n) => n && n.disconnect());
       if (this.fxTail > 0 && !this.fadingOut) later(cut, this.fxTail * 1000);
       else cut();
@@ -1076,6 +1339,45 @@
     } else {
       getBuffer(v.mediaId).then((buf) => v.start(buf), () => v.finish());
     }
+  }
+
+  // Gain curve for a harmonizer copy at `ratio` times the dry's rate, over `dur` seconds from the buffer
+  // position `offset`: the dry's RMS envelope over the copy's, so the copy decays like the dry; 0 at the end.
+  const envelopes = new Map(); // media id -> RMS per 10 ms of the buffer
+  function copyEnvelope(mediaId, buffer, offset, ratio, dur, gain) {
+    let env = envelopes.get(mediaId);
+    if (!env) {
+      const block = Math.round(buffer.sampleRate / 100), x = buffer.getChannelData(0);
+      env = new Float32Array(Math.ceil(x.length / block) + 1);
+      for (let b = 0; b * block < x.length; b++) {
+        let sum = 0;
+        const end = Math.min(x.length, (b + 1) * block);
+        for (let i = b * block; i < end; i++) sum += x[i] * x[i];
+        env[b] = Math.sqrt(sum / (end - b * block));
+      }
+      envelopes.set(mediaId, env);
+    }
+    const at = (t) => env[Math.min(env.length - 1, Math.floor(t * 100))];
+    const n = Math.max(2, Math.ceil(dur * 100));
+    const peak = env.reduce((a, b) => Math.max(a, b), 0);
+    const curve = new Float32Array(n);
+    for (let i = 0; i < n - 1; i++) {
+      const t = (i / (n - 1)) * (buffer.duration - offset);
+      curve[i] = gain * Math.min(4, at(offset + t) / Math.max(at(offset + t * ratio), peak * 1e-3));
+    }
+    return curve;
+  }
+
+  // The Harmonizer on a voice's way, if any (the measured model: build_audio.py, measure_fx.py).
+  function harmonizerOf(chain) {
+    if (nodeFxOff) return null;
+    for (const id of chain) {
+      for (const [, fxId] of nodes[id].fx || []) {
+        const e = data.effects && data.effects[fxId];
+        if (e && e.plugin === 'harmonizer' && e.voices) return e;
+      }
+    }
+    return null;
   }
 
   // The first Priority property up the hierarchy (not additive).
@@ -1932,13 +2234,15 @@
     // Test only (port/audio/audiodiff.html): renders a scripted case on an OfflineAudioContext and
     // returns the stereo mix as [left, right]. spec: {duration, rate, seed, listener: [x, y, z],
     // steps: [{t, op, args}]} where op is a method of this API. Replaces the live context and resets
-    // all engine state for every call.
+    // all engine state for every call. spec.nodeFxOff / busFxOff: without the effects on sounds / busses (measure_fx.py).
     async render(spec) {
       await Promise.all(packs);
       const rate = spec.rate || 48000;
       offline = new OfflineAudioContext(2, Math.ceil(spec.duration * rate), rate);
+      nodeFxOff = !!spec.nodeFxOff;
+      busFxOff = !!spec.busFxOff;
       ctx = offline;
-      for (const m of [voices, Music.instances, stateValues, switchValues, rtpcGlobal, rtpcObj, objects, seqState, modifiers, busses]) m.clear();
+      for (const m of [voices, Music.instances, stateValues, switchValues, rtpcGlobal, rtpcObj, objects, seqState, modifiers, busses, sharedNets]) m.clear();
       timers = [];
       buildBusses();
       random = mulberry32(spec.seed || 1);
@@ -2044,6 +2348,13 @@
 
     setSwitch(group, value, obj) {
       setSwitch(group >>> 0, value >>> 0, objKey(obj));
+    },
+
+    // Test only (port/audio/measure_fx.py): plays a sound or container on its own, like WwiseRef's playNode.
+    playNode(id, obj, x, y, z) {
+      obj = objKey(obj);
+      if (x !== undefined && obj !== -1) objects.set(obj, { x, y, z });
+      playNode(id >>> 0, { obj, pid: nextPlayingId++, event: 0 });
     },
 
     setState(group, state) {

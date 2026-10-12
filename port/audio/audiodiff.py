@@ -150,7 +150,7 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
 
-def render_ours(out: Path, ids, jobs, feat_dir: Path = None, wav_dir: Path = None):
+def render_ours(out: Path, ids, jobs, feat_dir: Path = None, wav_dir: Path = None, query=""):
     """Renders `ids` in `jobs` headless Chrome tabs. A tab that makes no progress for STALL_SECONDS (a
     headless Chrome sometimes never loads its page) is given up on and whatever is left is rendered
     again, up to three rounds."""
@@ -178,7 +178,7 @@ def render_ours(out: Path, ids, jobs, feat_dir: Path = None, wav_dir: Path = Non
             profile = Path(tempfile.mkdtemp(prefix="audiodiff-chrome-"))
             procs = [subprocess.Popen([str(chrome), "--headless=new", "--disable-gpu", "--no-first-run", "--mute-audio",
                                        "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-                                       f"--user-data-dir={profile / str(j)}", f"http://127.0.0.1:{port}/audiodiff.html?part={j}"],
+                                       f"--user-data-dir={profile / str(j)}", f"http://127.0.0.1:{port}/audiodiff.html?part={j}{query}"],
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) for j in range(n)]
             last = 0
             try:

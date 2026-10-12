@@ -187,3 +187,81 @@ the GL version under `#if !UNITY_REVERSED_Z` (`fix_shadow_bias`); the soft parti
 `_CameraDepthTexture`, go through `_ZBufferParams`/`_ProjectionParams` and are platform-independent. All these rewrites
 are under `#if`/macros on the platform and no-ops on D3D11: the same files are right in the editor on D3D11 and on GLES,
 `shaderdiff.sh` checks that they don't change the DX11 result, and `abtest.sh` compares the two APIs (below).
+
+## Sound
+
+Wwise is a native library and its banks are built for Windows, so the browser doesn't run it: `port/audio/etg-audio.js`
+is a small Wwise-like engine on Web Audio that interprets the banks' object graph. `WebShim.WwiseShim` (patched in for
+`AkSoundEnginePINVOKE`) forwards the game's calls (PostEvent, SetSwitch, SetState, SetRTPCValue, positions...) through
+`EtgWebShim.jslib` to `window.EtgAudio`.
+
+- `wwbank.py` parses `Init.bnk` / `SFX.bnk` (bank version 128); every HIRC object is read to its exact end.
+- `build_audio.py` writes `StreamingAssets/webaudio/`: `audio.json` (events, actions, nodes, busses, effects, measured
+  reverbs and effect models), sound packs (Opus), music files, the engine, `soundboard.html` (post events, set
+  switches/states/volumes: `http://localhost:8080/StreamingAssets/webaudio/soundboard.html` with `serve-webbuild.ps1`).
+  Encodes are cached; a re-run takes seconds. It copies everything into `webbuild/` too.
+- `port/WwiseRef` (.NET 9) is the reference: it loads the game's `AkSoundEngine.dll`, suspends its output and replaces
+  `QueryPerformanceCounter` with a virtual clock, so each `RenderAudio()` renders one 1024-sample frame offline.
+  `WwiseRef <root> <cases.json> <out> [--only ids] [--remove-fx bus:index,...] [--remove-node-fx node:index,...]`;
+  steps: `postEvent`, `playNode` (a sound or container alone, through a DynamicSequence), `setSwitch`, `setState`,
+  `setRtpc`, `stopAll`.
+- `audiodiff.py`: every event (per switch/state value), music state and transition, volume curve, mix state and 3D
+  position rendered by WwiseRef and by `EtgAudio.render()` in headless Chrome; level, peak, onset, end, spectral
+  centroid and balance compared (`port/build/audiodiff/report.html`, worst cases with audio of both).
+
+### Effects
+
+- Parametric EQ and Delay: built from their parameters (biquads, a feedback delay line).
+- Bus reverbs (Dungeon, the aux busses Foyer / Dimension / Dimension_Delay): impulse responses measured in Wwise by
+  `measure_ir.py` (renders with the bus's effects on and off, Wiener deconvolution) and played by a ConvolverNode.
+- Effects on sounds and containers (41 instances): `measure_fx.py`.
+
+  ```
+  python port/audio/measure_fx.py render   # every effect node alone (playNode), with and without its effects
+  python port/audio/measure_fx.py ir       # Matrix Reverb / RoomVerb -> port/build/audio/ir/fx<id>.wav, fx.json
+  python port/audio/measure_fx.py fit      # the other plugins -> port/build/audio/ir/fx_models.json
+  python port/audio/build_audio.py         # ships both in audio.json / ir/
+  python port/audio/measure_fx.py check    # engine with/without the models vs Wwise with/without the effects
+  ```
+
+  The renders have every bus effect removed and VOL_SFX at 10 (without the master's limiter 100 clips the capture);
+  rendering a node alone matters: on layered events (EnergyCannon, Melter, the guns' shots) only one layer carries the
+  effect. The effect's input is the dry render divided by the gain after it (the ratio of its RMS to the decoded media's).
+  Parameter layouts were decoded from the banks' blocks and confirmed by the fits; per plugin:
+
+  - **Compressor** (4; threshold -6 dB, ratio 3): wet - dry is at -60 dB in Wwise, the threshold is never reached
+    by these sounds. Left out.
+  - **Matrix Reverb** (9) / **RoomVerb** (4): linear, but on sustained sounds (wall_reveal, beholster_death) the tail is
+    almost uncorrelated with the input at any lag (modulated), so a Wiener response loses most of it. Fitted instead
+    is the energy: per octave band a level and decay time after one predelay, from 10 ms block powers of dry and of
+    wet - dry. The decay times and predelays come out as the bank says (RT 4 s / 100 ms -> 3.65 s / 120 ms); the
+    modelled tail energy is within 0.7 dB per case. Shipped as band-limited noise under those envelopes (16-bit,
+    `ir_gain`), one ConvolverNode per effect and destination shared by all its voices; the direct sound is the voice.
+    9 distinct parameter blocks -> 9 responses (0.2-0.6 MB each).
+  - **Guitar Distortion** (10, all Overdrive, EQ bands at 0 dB): `dry*x + wet*hp(lp(shape(k*hp(x))/k))`, shape a
+    knee curve `v/(1+|v|^p)^(1/p)` with rectification; k, knee, the filters and the mix fitted per instance. Sample
+    residual -13 to -38 dB (best linear fit -4 to -12 dB); what remains is Wwise's overshoot on clipped edges. Per voice:
+    IIR filters, a WaveShaper (2x oversampled), gains — 8 nodes.
+  - **Flanger** (9): Dattorro's universal comb with the bank's dry / feed-forward / feedback levels, mix, LFO waveform
+    and rate; delay `delay*(center + swing*lfo)`. Three instances fit to -54…-62 dB with center 1, swing depth/2;
+    the others get fitted center/swing/phase (-21…-45 dB). The 19 Hz, 10 ms, 100 % one (BlasterBow, AntGoop) sweeps
+    faster than real time and can't be fitted sample by sample; its level and spectrum match. A DelayNode in a cycle
+    can't be shorter than a render quantum (2.7 ms) and these delays are 0.25-5 ms, so the feedback is unrolled into
+    up to 16 taps `fb^(k-1) x(t - k D(t))` in one network per effect shared by its voices; the LFO restarts at the
+    fitted phase with each new voice, as Wwise's starts with the voice.
+  - **Tremolo** (1): the gain wet/dry folded over its period (a smoothed saw, 19.84 Hz, phase from the voice's start),
+    played by a per-voice OscillatorNode with that PeriodicWave into a GainNode.
+  - **Harmonizer** (4): the pitch voices as extra buffer sources at their rate (a pitch shifter keeps time, so each copy
+    follows the dry's RMS envelope and ends with it), everything delayed by the 1024-sample window as Wwise's sync-dry
+    does (measured: dry at lag 1024 with the bank's -3 dB); the voices' level calibrated to Wwise's output energy.
+
+  `check` compares what each effect changes (Wwise wet vs dry, engine with vs without its model; the engine's own
+  level errors cancel out). Mean error of that change over all 41 instances, without models -> with: level
+  2.04 -> 0.21 dB, spectral centroid 0.186 -> 0.061 octaves, end of the audible part 0.26 -> 0.04 s.
+
+  In the full audiodiff, the 53 event cases that pass through a node effect: 47 -> 40 flagged, mean |level difference|
+  4.4 -> 3.0 dB (p10..p90 -7.4..+3.0 -> -2.4..+2.5 dB), centroid 0.39 -> 0.34 octaves. Overall 1326 -> 1319 of 2063
+  cases flagged, sound effects' level median -0.2 dB (p10..p90 -2.1..+3.5).
+
+Known differences left (audiodiff): some sounds are about 10 dB quieter than in Wwise with or without effects
+(deathray, omegaBeam, several guns); a few music starts are late (Drone, Secret_Room); the HPF is slightly strong.

@@ -55,6 +55,13 @@ internal static class Ak
     public const ulong InvalidGameObject = ulong.MaxValue; // AK_INVALID_GAME_OBJECT: global RTPC value
     [DllImport(Dll)] public static extern void CSharp_StopAll__SWIG_1();
     [DllImport(Dll)] public static extern int CSharp_SetBusEffect__SWIG_0(uint bus, uint fxIndex, uint fxShareSet);
+    [DllImport(Dll)] public static extern uint CSharp_DynamicSequenceOpen__SWIG_3(ulong obj);
+    [DllImport(Dll)] public static extern IntPtr CSharp_DynamicSequenceLockPlaylist(uint playingId);
+    [DllImport(Dll)] public static extern int CSharp_DynamicSequenceUnlockPlaylist(uint playingId);
+    [DllImport(Dll)] public static extern int CSharp_AkPlaylist_Enqueue__SWIG_4(IntPtr playlist, uint audioNode);
+    [DllImport(Dll)] public static extern int CSharp_DynamicSequencePlay__SWIG_2(uint playingId);
+    [DllImport(Dll)] public static extern int CSharp_DynamicSequenceClose(uint playingId);
+    [DllImport(Dll)] public static extern int CSharp_SetActorMixerEffect(uint node, uint fxIndex, uint fxShareSet);
     [DllImport(Dll)] public static extern void CSharp_SetRandomSeed(uint seed);
     [DllImport(Dll)] public static extern int CSharp_RenderAudio__SWIG_1();
     [DllImport(Dll)] public static extern int CSharp_StartOutputCapture([MarshalAs(W)] string file);

@@ -7,7 +7,8 @@
 <body>
 <pre id="log"></pre>
 <!-- Renders audiodiff cases (cases.json) with EtgAudio.render() and POSTs each mix back as a 16-bit
-     WAV. Opened by audiodiff.py in headless Chrome: ?part=j renders the case ids parts.json lists for j. -->
+     WAV. Opened by audiodiff.py in headless Chrome: ?part=j renders the case ids parts.json lists for j;
+     &nodefx=off / &busfx=off without the effects on sounds / busses (measure_fx.py check). -->
 <script src="etg-audio.js"></script>
 <script>
 (async function () {
@@ -29,7 +30,7 @@
       if (!mine.has(c.id)) continue;
       try {
         const [l, r] = await A.render({ duration: c.duration, rate: 48000, seed: c.seed, listener: [0, 0, 0],
-          steps: reset.concat(c.steps) });
+          steps: reset.concat(c.steps), nodeFxOff: q.get('nodefx') === 'off', busFxOff: q.get('busfx') === 'off' });
         await post('/result/' + c.id, wav16(l, r, 48000));
       } catch (e) {
         await post('/error', c.id + ' ' + c.name + ': ' + (e && e.stack || e));
