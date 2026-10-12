@@ -16,7 +16,10 @@ Replaces Unity's default WebGL template page.
 ## Fullscreen
 
 Fullscreen is always the whole page, so the toolbar keeps working, and Esc is kept for the game
-with `navigator.keyboard.lock` (Chrome/Edge: hold Esc to leave). The game can ask for fullscreen
+with `navigator.keyboard.lock` (Chrome/Edge: hold Esc to leave). W, T and N are locked as well, so
+Ctrl+W / Ctrl+T / Ctrl+N don't close the tab or open another mid-game; outside fullscreen browsers
+don't let a page cancel those, so after Play the page asks "Leave site?" on close or reload
+(`Etg.guardUnload`). The game can ask for fullscreen
 itself: the RECOMMENDED visual preset (the default) forces PreferredFullscreenMode.FULLSCREEN
 (`GameOptions.CurrentVisualPreset` setter, `BraveOptionsMenuItem.Update`) ->
 `DoSetResolution(.., true)` -> `Screen.SetResolution(.., fullscreen)`, which Unity defers to the

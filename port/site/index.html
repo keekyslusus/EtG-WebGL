@@ -210,6 +210,7 @@
       var started = false, idle = null;
       playBtn.onclick = function () {
         started = true;
+        Etg.guardUnload(true);
         card.classList.add("gone");
         Etg.game.Module.canvas.focus();
       };

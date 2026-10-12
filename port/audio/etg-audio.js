@@ -2301,7 +2301,10 @@
       if (ctx) return;
       base = baseUrl.endsWith('/') ? baseUrl : baseUrl + '/';
       version = buildVersion || '';
-      const live = new (window.AudioContext || window.webkitAudioContext)();
+      // A 40 ms output buffer instead of the default 'interactive' (10 ms), which crackled on some
+      // machines when the window was minimized or a notification popped up. Seconds, not 'balanced':
+      // Chrome on Windows gives 'balanced' the same 10 ms buffer as 'interactive'.
+      const live = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 0.04 });
       ctx = live;
       const unlock = () => {
         if (offline) return;

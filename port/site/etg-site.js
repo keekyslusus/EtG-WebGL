@@ -146,12 +146,30 @@
   };
 
   // Esc is the game's pause key: in fullscreen, keep it for the game (Chrome/Edge then show
-  // "press and hold Esc to exit"); elsewhere Esc simply leaves fullscreen.
+  // "press and hold Esc to exit"); elsewhere Esc simply leaves fullscreen. W, T and N are locked too,
+  // so Ctrl+W / Ctrl+T / Ctrl+N mid-fight reach the page instead of closing the tab or opening
+  // another; the page drops them. Browser shortcuts can't be cancelled outside fullscreen:
+  // guardUnload covers those.
+  var LOCKED_SHORTCUTS = { KeyW: 1, KeyT: 1, KeyN: 1 };
   Etg.onFullscreenChange(function () {
     var kb = navigator.keyboard;
     if (!kb || !kb.lock) return;
-    if (Etg.isFullscreen()) kb.lock(["Escape"]).catch(function () {});
+    if (Etg.isFullscreen()) kb.lock(["Escape", "KeyW", "KeyT", "KeyN"]).catch(function () {});
     else kb.unlock();
+  });
+  addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && LOCKED_SHORTCUTS[e.code] && Etg.isFullscreen()) e.preventDefault();
+  }, true);
+
+  // While the game runs, closing or reloading the tab (Ctrl+W, Ctrl+R, F5) asks "Leave site?" first.
+  var unloadGuarded = false;
+  Etg.guardUnload = function (on) {
+    unloadGuarded = on;
+  };
+  addEventListener("beforeunload", function (e) {
+    if (!unloadGuarded) return;
+    e.preventDefault();
+    e.returnValue = "";
   });
 
   // ------------------------------------------------------------------ saves (IDBFS)
@@ -737,7 +755,10 @@
           if (!ok) return;
           return Etg.writeSaves(files).then(function () {
             Etg.toast("Imported - restarting");
-            setTimeout(function () { location.reload(); }, 600);
+            setTimeout(function () {
+              Etg.guardUnload(false);
+              location.reload();
+            }, 600);
           });
         });
       });
