@@ -10,6 +10,13 @@ if [ "${1:-}" = "--mods" ]; then
     MODS=1
 fi
 
+# Replacing the plugin DLLs under a running editor makes it hot-reload them, and that reload can leave its
+# script domain broken (even Unity's own UnityEngine.UI / UnityEngine.Timeline stop resolving until restart).
+if [ "${APPLY_WHILE_UNITY_OPEN:-0}" != 1 ] && tasklist //FI "IMAGENAME eq Unity.exe" //NH 2>/dev/null | grep -qi "^Unity.exe"; then
+    echo "Unity is running - close it first (or APPLY_WHILE_UNITY_OPEN=1 to go ahead anyway)." >&2
+    exit 1
+fi
+
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
 MANAGED="$ROOT/Enter the Gungeon/EtG_Data/Managed"

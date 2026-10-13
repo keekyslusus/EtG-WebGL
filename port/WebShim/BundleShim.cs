@@ -144,6 +144,19 @@ namespace WebShim
             return scenes.ToArray();
         }
 
+        public static void Unload(AssetBundle bundle, bool unloadAllLoadedObjects)
+        {
+            string simulated = SimulatedName(bundle);
+            if (simulated == null)
+            {
+                bundle.Unload(unloadAllLoadedObjects);
+                return;
+            }
+            // A placeholder has nothing to unload; forget it so LoadFromFile makes a new one.
+            s_placeholders.Remove(bundle);
+            s_bundles.Remove(simulated);
+        }
+
         public static string[] GetAllAssetNames(AssetBundle bundle)
         {
             string simulated = SimulatedName(bundle);
@@ -170,8 +183,12 @@ namespace WebShim
 
         // ---- Simulation ----
 
-        // Placeholders have no native object, so UnityEngine.Object's == calls them null and its
-        // Equals/GetHashCode can't tell two of them apart: key them by reference.
+        // Placeholders have no native object; on their own, UnityEngine.Object's == calls them null, which
+        // breaks code that checks a loaded bundle (Alexandria's StaticReferences.Init drops every one). So
+        // each borrows the instance ID of its own hidden live object (Object.IsNativeObjectAlive looks the ID
+        // up when there is no native pointer; == between two objects compares the IDs): == null is false,
+        // and no native call ever sees a placeholder, because every instance AssetBundle call goes through
+        // this class. Placeholders share Object's GetHashCode quirks: key them by reference.
         private static readonly Dictionary<AssetBundle, string> s_placeholders = new Dictionary<AssetBundle, string>(new ReferenceComparer());
         // bundle name -> lower-case key (full path or file name, each with and without extension) -> asset paths
         private static readonly Dictionary<string, Dictionary<string, List<string>>> s_simIndex = new Dictionary<string, Dictionary<string, List<string>>>();
@@ -195,6 +212,12 @@ namespace WebShim
                 return null;
             }
             AssetBundle bundle = (AssetBundle)FormatterServices.GetUninitializedObject(typeof(AssetBundle));
+            GameObject anchor = new GameObject("[WebShim] simulated bundle " + name) { hideFlags = HideFlags.HideAndDontSave };
+            FieldInfo instanceId = typeof(UnityEngine.Object).GetField("m_InstanceID", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (instanceId != null)
+            {
+                instanceId.SetValue(bundle, anchor.GetInstanceID());
+            }
             s_placeholders[bundle] = name;
             return bundle;
         }

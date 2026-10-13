@@ -690,8 +690,7 @@ internal static class Program
                         "LoadAsset(System.String,System.Type)" => shim.Bundle("LoadAsset", "UnityEngine.AssetBundle", "System.String", "System.Type"),
                         "GetAllScenePaths()" => shim.Bundle("GetAllScenePaths", "UnityEngine.AssetBundle"),
                         "GetAllAssetNames()" => shim.Bundle("GetAllAssetNames", "UnityEngine.AssetBundle"),
-                        // Bundles of mods (PrefabAPI) are always real ones.
-                        "Unload(System.Boolean)" => null,
+                        "Unload(System.Boolean)" => shim.Bundle("Unload", "UnityEngine.AssetBundle", "System.Boolean"),
                         _ => Unhandled(report, $"AssetBundle.{sig} in {where}"),
                     };
                     break;
