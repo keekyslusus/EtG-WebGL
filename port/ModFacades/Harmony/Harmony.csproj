@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>0Harmony</AssemblyName>
+    <RootNamespace>HarmonyLib</RootNamespace>
+    <AssemblyVersion>2.9.0.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManaged)UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

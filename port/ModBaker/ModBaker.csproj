@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- .NET Framework, not .NET 9: the mods and BepInEx's HarmonyX/MonoMod are net35 assemblies, and the
+       baker runs HarmonyX itself (reflection over the game + mod assemblies) to build patched bodies. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>EtgModBaker</RootNamespace>
+    <BepInExCore>$(MSBuildThisFileDirectory)../../mods/BepInEx-BepInExPack_EtG/BepInExPack_EtG/BepInEx/core</BepInExCore>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="0Harmony"><HintPath>$(BepInExCore)/0Harmony.dll</HintPath></Reference>
+    <Reference Include="MonoMod.Utils"><HintPath>$(BepInExCore)/MonoMod.Utils.dll</HintPath></Reference>
+    <Reference Include="MonoMod.RuntimeDetour"><HintPath>$(BepInExCore)/MonoMod.RuntimeDetour.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil"><HintPath>$(BepInExCore)/Mono.Cecil.dll</HintPath></Reference>
+    <Reference Include="Mono.Cecil.Rocks"><HintPath>$(BepInExCore)/Mono.Cecil.Rocks.dll</HintPath></Reference>
+    <!-- Mods reference the signed Newtonsoft.Json 13; MtG API ships an unsigned Unity build, which
+         .NET Framework refuses to bind. Only types are needed here, so the signed one is enough. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+</Project>

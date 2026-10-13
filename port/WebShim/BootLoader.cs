@@ -46,6 +46,11 @@ namespace WebShim
                     m_done++;
                 }
                 Debug.Log("[WebShim] Bundle simulation: " + all.Length + " bundles served from the AssetDatabase");
+                yield return StartMods();
+                if (m_error != null)
+                {
+                    yield break;
+                }
                 SceneManager.LoadScene(1);
                 yield break;
             }
@@ -106,9 +111,24 @@ namespace WebShim
                 }
                 m_done++;
             }
+            yield return StartMods();
+            if (m_error != null)
+            {
+                yield break;
+            }
             m_current = "Starting...";
             yield return null;
             SceneManager.LoadScene(1);
+        }
+
+        // Baked mods (if any) start before the game's first scene, like BepInEx's chainloader.
+        private IEnumerator StartMods()
+        {
+            return ModFiles.LoadAndStart(s => m_current = s, e =>
+            {
+                m_error = e;
+                Debug.LogError("[WebShim] " + e);
+            });
         }
 
         private void OnGUI()

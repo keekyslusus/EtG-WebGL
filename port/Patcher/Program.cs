@@ -16,7 +16,9 @@ namespace EtgWebPatcher;
 ///  - assemblies with names Unity reserves for its own script assemblies (Assembly-CSharp...) are
 ///    renamed, otherwise the editor silently ignores them and every MonoBehaviour shows as missing.
 ///
-/// Usage: Patcher &lt;game Managed dir&gt; &lt;WebShim.dll&gt; &lt;output dir&gt;
+/// Usage: Patcher &lt;game Managed dir&gt; &lt;WebShim.dll&gt; &lt;output dir&gt; [&lt;mods dir&gt;]
+/// The optional mods dir (port/ModBaker output) holds game assemblies with the mods baked in, which
+/// replace the originals, and the mods with their runtime libraries, which are patched as well.
 /// </summary>
 internal static class Program
 {
@@ -61,6 +63,9 @@ internal static class Program
     private static readonly (string Type, string Method)[] StubbedMethods =
     {
         ("BraveOptionsMenuItem/WindowsResolutionManager", "TrySetDisplay"),
+        // Newtonsoft.Json (shipped with Mod the Gungeon API) compiles DynamicMethods when it thinks it may;
+        // IL2CPP has no Reflection.Emit. false = its late-bound reflection path.
+        ("Newtonsoft.Json.Serialization.JsonTypeReflector", "get_DynamicCodeGeneration"),
     };
 
     // Static methods whose body becomes a call to the WebShim method of the same name and signature.
@@ -95,6 +100,28 @@ internal static class Program
         "InControl.XInputDeviceManager::CheckPlatformSupport",
     };
 
+    // Integer literals in mod code replaced by a WebShim call (same value type), found by the literal and
+    // the method it's passed to. Alexandria's PrefabAPI writes AssetBundles at runtime, for Windows.
+    private static readonly (string Type, string Method, int Literal, string NextCall, string ShimType, string ShimMethod)[] LiteralShims =
+    {
+        ("Alexandria.PrefabAPI.AssetBundleBuilder", "BuildBundleFile", 19, "Write", "WebShim.BundleShim", "RuntimeBundleTargetPlatform"),
+    };
+
+    // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
+    // errors where something IL2CPP-specific may go wrong. Logging only, behaviour unchanged.
+    private static readonly (string Type, string Method)[] LogSwallowedExceptions =
+    {
+        ("ETGMod/Assets", "SetupSpritesFromFolder"),
+    };
+
+    // Static `Delegate F(MethodBase)` methods that compile the delegate with Reflection.Emit (none on IL2CPP):
+    // the body becomes `return new <ReturnType>(new WebShim.ReflectionInvoker(method).Invoke)`. The
+    // delegate type must take (object target, object[] args) and return object.
+    private static readonly (string Type, string Method)[] ReflectionInvokerBodies =
+    {
+        ("ReflectionHelper", "CreateDelegate"), // Mod the Gungeon API
+    };
+
     // Types whose threads loop forever polling hardware; running them synchronously would hang.
     private static readonly HashSet<string> NeverStartThreadsIn = new()
     {
@@ -107,28 +134,41 @@ internal static class Program
         {
             return Verify(args[1], args.Skip(2).ToArray());
         }
-        if (args.Length != 3)
+        if (args.Length != 3 && args.Length != 4)
         {
-            Console.Error.WriteLine("Usage: Patcher <game Managed dir> <WebShim.dll> <output dir>");
+            Console.Error.WriteLine("Usage: Patcher <game Managed dir> <WebShim.dll> <output dir> [<mods dir>]");
             return 2;
         }
         string managedDir = Path.GetFullPath(args[0]);
         string shimPath = Path.GetFullPath(args[1]);
         string outDir = Path.GetFullPath(args[2]);
+        string? modsDir = args.Length == 4 ? Path.GetFullPath(args[3]) : null;
         Directory.CreateDirectory(outDir);
 
         var resolver = new DefaultAssemblyResolver();
+        if (modsDir != null)
+        {
+            resolver.AddSearchDirectory(modsDir);
+        }
         resolver.AddSearchDirectory(managedDir);
         resolver.AddSearchDirectory(Path.GetDirectoryName(shimPath)!);
+        // Mods with enum default values of game types: writing them resolves EtgGame (renamed, already written).
+        resolver.AddSearchDirectory(outDir);
         var readParams = new ReaderParameters { AssemblyResolver = resolver, ReadingMode = ReadingMode.Immediate };
 
         using var shim = AssemblyDefinition.ReadAssembly(shimPath, readParams);
         var shimApi = new ShimApi(shim.MainModule);
 
-        bool ok = true;
-        foreach (string name in Targets)
+        var targets = Targets.ToList();
+        if (modsDir != null)
         {
-            string input = Path.Combine(managedDir, name);
+            targets.AddRange(Directory.GetFiles(modsDir, "*.dll").Select(Path.GetFileName)
+                .Where(n => !targets.Contains(n, StringComparer.OrdinalIgnoreCase) && !n!.Equals(Path.GetFileName(shimPath), StringComparison.OrdinalIgnoreCase))!);
+        }
+        bool ok = true;
+        foreach (string name in targets)
+        {
+            string input = modsDir != null && File.Exists(Path.Combine(modsDir, name)) ? Path.Combine(modsDir, name) : Path.Combine(managedDir, name);
             if (!File.Exists(input))
             {
                 Console.WriteLine($"[skip] {name}: not found");
@@ -234,12 +274,83 @@ internal static class Program
                 report.Count($"body redirected: {typeName}.{methodName} -> {targetTypeName}.{targetName}");
             }
         }
+        foreach (var (typeName, methodName, literal, nextCall, shimType, shimMethod) in LiteralShims)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                var target = shim.Find(shimType, shimMethod, []);
+                int count = 0;
+                foreach (var ins in method.Body.Instructions)
+                {
+                    if (ins.OpCode.Code is Code.Ldc_I4 or Code.Ldc_I4_S && Convert.ToInt32(ins.Operand) == literal
+                        && ins.Next?.Operand is MethodReference next && next.Name == nextCall)
+                    {
+                        ins.OpCode = OpCodes.Call;
+                        ins.Operand = module.ImportReference(target);
+                        count++;
+                    }
+                }
+                if (count != 1)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one {literal} passed to {nextCall}, found {count}");
+                }
+                report.Count($"literal {literal} -> {target.DeclaringType.Name}.{target.Name}: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName) in ReflectionInvokerBodies)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody && m.IsStatic
+                && m.Parameters.Count == 1 && m.Parameters[0].ParameterType.FullName == "System.Reflection.MethodBase") ?? [])
+            {
+                var invokerType = shim.Type("WebShim.ReflectionInvoker");
+                var ctor = invokerType.Methods.Single(m => m.IsConstructor && !m.IsStatic);
+                var invoke = invokerType.Methods.Single(m => m.Name == "Invoke");
+                var delegateCtor = method.ReturnType.Resolve().Methods.Single(m => m.IsConstructor && m.Parameters.Count == 2);
+                method.Body = new MethodBody(method);
+                var il = method.Body.GetILProcessor();
+                il.Emit(OpCodes.Ldarg_0);
+                il.Emit(OpCodes.Newobj, module.ImportReference(ctor));
+                il.Emit(OpCodes.Ldftn, module.ImportReference(invoke));
+                il.Emit(OpCodes.Newobj, module.ImportReference(delegateCtor));
+                il.Emit(OpCodes.Ret);
+                report.Count($"Reflection.Emit delegate -> ReflectionInvoker: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName) in LogSwallowedExceptions)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                var log = module.ImportReference(shim.Find("WebShim.ExceptionShim", "LogCaught", ["System.Object"]));
+                foreach (var handler in method.Body.ExceptionHandlers.Where(h => h.HandlerType == ExceptionHandlerType.Catch && h.HandlerStart.OpCode == OpCodes.Pop))
+                {
+                    // pop -> call LogCaught(object): same stack effect.
+                    handler.HandlerStart.OpCode = OpCodes.Call;
+                    handler.HandlerStart.Operand = log;
+                    report.Count($"swallowed exceptions logged: {typeName}.{methodName}");
+                }
+            }
+        }
         foreach (var (typeName, methodName) in StubbedMethods)
         {
             foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
             {
                 EmitDefaultBody(method);
                 report.Count($"stubbed: {typeName}.{methodName}");
+            }
+        }
+
+        // Custom attributes on generic parameter constraints (C# 8 nullability, e.g. in Newtonsoft.Json):
+        // the IKVM reader of Unity 2017's mcs rejects the whole assembly ("does not contain valid
+        // metadata", CS0009) and with it every script compile. They mean nothing at runtime.
+        foreach (var type in AllTypes(module))
+        {
+            foreach (var gp in type.GenericParameters.Concat(type.Methods.SelectMany(m => m.GenericParameters)))
+            {
+                foreach (var constraint in gp.Constraints.Where(c => c.HasCustomAttributes))
+                {
+                    constraint.CustomAttributes.Clear();
+                    report.Count("constraint attributes removed (mcs can't read them)");
+                }
             }
         }
 
@@ -352,6 +463,12 @@ internal static class Program
         "MovieTexture", "ProceduralMaterial",
     };
 
+    // Class library types missing from the WebGL profile, implemented in WebShim/SystemStubs.cs.
+    private static readonly HashSet<string> StubbedSystemTypes = new()
+    {
+        "System.ComponentModel.BindingList`1", "System.ComponentModel.AddingNewEventArgs", "System.ComponentModel.AddingNewEventHandler",
+    };
+
     /// <summary>
     /// Points references to WebGL-missing UnityEngine types at WebShim's stubs. Cecil shares one
     /// TypeReference instance per TypeRef row, so changing its scope fixes every signature using it.
@@ -361,8 +478,10 @@ internal static class Program
         AssemblyNameReference? shimRef = null;
         foreach (var typeRef in module.GetTypeReferences())
         {
-            if (typeRef.Namespace != "UnityEngine" || !StubbedUnityTypes.Contains(typeRef.Name)
-                || typeRef.Scope is not AssemblyNameReference scope || !scope.Name.StartsWith("UnityEngine"))
+            bool unity = typeRef.Namespace == "UnityEngine" && StubbedUnityTypes.Contains(typeRef.Name)
+                && typeRef.Scope is AssemblyNameReference us && us.Name.StartsWith("UnityEngine");
+            bool system = StubbedSystemTypes.Contains(typeRef.FullName) && typeRef.Scope is AssemblyNameReference ss && ss.Name == "System";
+            if (!unity && !system)
             {
                 continue;
             }
@@ -376,7 +495,7 @@ internal static class Program
                 }
             }
             typeRef.Scope = shimRef;
-            report.Count($"type retargeted to WebShim stub: UnityEngine.{typeRef.Name}");
+            report.Count($"type retargeted to WebShim stub: {typeRef.FullName}");
         }
     }
 
@@ -530,7 +649,7 @@ internal static class Program
                         "Abort()" => shim.Thread("Abort", "System.Threading.Thread"),
                         // Harmless on WebGL: naming, priority, background flag, current thread queries.
                         "set_Name(System.String)" or "set_IsBackground(System.Boolean)" or "set_Priority(System.Threading.ThreadPriority)"
-                            or "get_CurrentThread()" or "get_ManagedThreadId()" or "get_Name()" => null,
+                            or "get_CurrentThread()" or "get_ManagedThreadId()" or "get_Name()" or "MemoryBarrier()" => null,
                         _ => Unhandled(report, $"Thread.{sig} in {where}"),
                     };
                     break;
@@ -538,9 +657,10 @@ internal static class Program
                 case "UnityEngine.AssetBundle":
                     if (!target.HasThis)
                     {
+                        // LoadFromMemory works as is (Alexandria's PrefabAPI, see LiteralShims).
                         replacement = sig == "LoadFromFile(System.String)"
                             ? shim.Bundle("LoadFromFile", "System.String")
-                            : target.Name.StartsWith("LoadFrom") ? Unhandled(report, $"AssetBundle.{sig} in {where}") : null;
+                            : target.Name.StartsWith("LoadFrom") && sig != "LoadFromMemory(System.Byte[])" ? Unhandled(report, $"AssetBundle.{sig} in {where}") : null;
                         break;
                     }
                     // Instance calls become BundleShim.X(bundle, args) so the editor's Play Mode can
@@ -569,6 +689,9 @@ internal static class Program
                         "LoadAsset(System.String)" => shim.Bundle("LoadAsset", "UnityEngine.AssetBundle", "System.String"),
                         "LoadAsset(System.String,System.Type)" => shim.Bundle("LoadAsset", "UnityEngine.AssetBundle", "System.String", "System.Type"),
                         "GetAllScenePaths()" => shim.Bundle("GetAllScenePaths", "UnityEngine.AssetBundle"),
+                        "GetAllAssetNames()" => shim.Bundle("GetAllAssetNames", "UnityEngine.AssetBundle"),
+                        // Bundles of mods (PrefabAPI) are always real ones.
+                        "Unload(System.Boolean)" => null,
                         _ => Unhandled(report, $"AssetBundle.{sig} in {where}"),
                     };
                     break;
@@ -686,6 +809,7 @@ internal static class Program
         public MethodDefinition Media(string name, params string[] parameters) => Find("WebShim.MediaShim", name, parameters);
         public MethodDefinition Screen(string name, params string[] parameters) => Find("WebShim.ScreenShim", name, parameters);
         public MethodDefinition XInput(string name, params string[] parameters) => Find("WebShim.XInputShim", name, parameters);
+        public TypeDefinition Type(string fullName) => shim.GetType(fullName) ?? throw new InvalidOperationException(fullName + " not found in WebShim");
         public AssemblyNameDefinition AssemblyName => shim.Assembly.Name;
 
         /// <summary>A public static method of typeName with the same name, parameter and return types.</summary>
@@ -697,7 +821,7 @@ internal static class Program
                 && m.Parameters.Select(p => p.ParameterType.FullName).SequenceEqual(method.Parameters.Select(p => p.ParameterType.FullName)));
         }
 
-        private MethodDefinition Find(string typeName, string name, string[] parameters, int genericArity = 0)
+        public MethodDefinition Find(string typeName, string name, string[] parameters, int genericArity = 0)
         {
             var type = shim.GetType(typeName) ?? throw new InvalidOperationException($"{typeName} not found in WebShim");
             return type.Methods.SingleOrDefault(m => m.Name == name && m.IsStatic && m.GenericParameters.Count == genericArity

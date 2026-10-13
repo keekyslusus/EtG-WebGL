@@ -1,0 +1,20 @@
+<Project>
+  <!--
+    Stand-ins for the BepInEx modding stack in the web build: same assembly names and the API surface
+    the baked mods still call at runtime (port/ModBaker already applied every patch, so Harmony's
+    PatchAll and MonoMod's Hook do nothing here). net35 like WebShim (Unity 2017.4 legacy runtime).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GameManaged>$(MSBuildThisFileDirectory)..\..\Enter the Gungeon\EtG_Data\Managed\</GameManaged>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net35" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

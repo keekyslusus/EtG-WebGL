@@ -343,8 +343,23 @@ public static class EtgWebBuild
         {
             Debug.LogWarning("[EtG Web] Build succeeded, errors logged during build: " + report);
         }
+        RemoveAsmJsFallback(output, manifest);
         CopySite(output);
         Debug.Log("[EtG Web] WebGL build written to " + output);
+    }
+
+    // 2017.4 can't build wasm without asm.js (Emscripten fastcomp: asm.js -> asm2wasm), and writes the asm.js
+    // as a fallback for browsers without WebAssembly (up to ~1 GB in development builds). The page only runs
+    // wasm: drop the files and their entries, so UnityLoader never looks for them.
+    private static void RemoveAsmJsFallback(string output, string manifest)
+    {
+        string build = Path.Combine(output, "Build");
+        foreach (string file in Directory.GetFiles(build, "*.asm.*"))
+        {
+            File.Delete(file);
+        }
+        string[] lines = File.ReadAllLines(manifest);
+        File.WriteAllLines(manifest, Array.FindAll(lines, l => !l.TrimStart().StartsWith("\"asm")));
     }
 
     // The page around the player (port/site; see install.py there, which does the same by hand).

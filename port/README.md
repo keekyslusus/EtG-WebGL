@@ -262,3 +262,71 @@ is a small Wwise-like engine on Web Audio that interprets the banks' object grap
 
 Known differences left (audiodiff): some sounds are about 10 dB quieter than in Wwise with or without effects
 (deathray, omegaBeam, several guns); a few music starts are late (Drone, Secret_Room); the HPF is slightly strong.
+
+## Mods
+
+BepInEx mods (r2modman / Thunderstore packages) can't be loaded by a WebGL player: IL2CPP compiles all C# to wasm
+ahead of time, there is no JIT, so neither new DLLs nor Harmony / MonoMod detours work at runtime. Instead a fixed
+mod pack is baked into the build: `./apply.sh --mods` installs the packages of `port/mods/modpack.txt` (plain
+`./apply.sh` takes them out again), then the usual player build.
+
+- `mods/fetch_mods.sh` copies the packages from the r2modman cache into `etg/mods/` (third-party binaries, not in git).
+- `ModBaker/bake.sh` (`port/ModBaker`, .NET Framework 4.7.2: it runs the mods' own net35 HarmonyX/MonoMod) loads the
+  game and the mods by reflection and lets HarmonyX build every patched body itself: patches are registered like
+  `PatchAll` does (one patch method at a time, so one bad target doesn't take its class down), the patcher backend is
+  replaced by one that only records them, then `HarmonyManipulator.Manipulate` runs on a `DynamicMethodDefinition`
+  of each original (prefixes, postfixes, finalizers, transpilers, IL manipulators - through `ILContext.Invoke`, as
+  ILHook does) and the result is copied into the game DLL with Cecil, every reference re-imported against the game's
+  own assemblies (HarmonyX here references .NET Framework's mscorlib 4.0, the game ships Unity's 2.0/3.5 profile).
+  - Patches on methods that can't be rewritten (UnityEngine, mscorlib: `Object.Instantiate` for Alexandria's fake
+    prefabs, `Enum.GetValues/...` for MtG API's enum extension) become wrappers in the mod
+    (`ModBaker.Redirects`), and every call in the game and mod assemblies is redirected to them. MtG API's MonoMod
+    patch that routes `Instantiate<T>(T)` through `Instantiate(Object)` is reproduced the same way.
+  - `[HarmonyReversePatch]` stand-ins get a copy of the original body.
+  - MonoMod `new Hook(from, to)`: from/to are recovered by evaluating the reflection code in front of the constructor;
+    the original body moves to a static `Name_orig_bakedN(self, ...)` and the target calls the hook with a delegate
+    to it.
+  - Mono finds `Load(string,string)` where .NET Framework reports `Load<T>(string,string)` as ambiguous: a finalizer
+    on `AccessTools.DeclaredMethod` (`MonoLikeLookup`) answers like Mono.
+  - What only ran while patching is stripped from the mods (IL manipulators, transpilers, their lambdas and closure
+    classes - everything touching Mono.Cecil / MonoMod.Utils / CodeInstruction), as are the `[Harmony*]` attributes;
+    mod references are set to the identities that ship (facades, MtG API's unsigned Newtonsoft.Json 11).
+- `port/ModFacades`: `BepInEx` (BaseUnityPlugin, config files, logging to the Unity log, Paths, Chainloader),
+  `0Harmony` (PatchAll does nothing, AccessTools, CollectionExtensions) and `MonoMod.RuntimeDetour` (Hook does
+  nothing) - the API the mods still call at runtime.
+- The patcher treats the mods like the game (threads, files, AssetBundles...). Mod-specific: `BindingList<T>` (MtG
+  API's SGUI; not in the WebGL profile) is implemented in `WebShim/SystemStubs.cs`; Alexandria's PrefabAPI writes
+  AssetBundles at runtime for StandaloneWindows64 and gets WebGL instead (`LiteralShims`).
+- Files the mods read (sprites, data) go into `StreamingAssets/mods/files.pack` (`mods/build_pack.py`); the Boot scene
+  unpacks it to `/mods/BepInEx/plugins/<package>/...` (r2modman's layout, DLLs as empty placeholders: mods find their
+  folder through their DLL's location) and starts the Chainloader (`WebShim/ModFiles.cs`) before the game's first
+  scene. `Paths.GameRootPath` (Resources/ for logs and mod data, BepInEx/config) is `<persistentDataPath>/modded`, in
+  IndexedDB like the saves. The editor reads the same tree from `etg/mods-runtime/`.
+
+Found on the first runs in the browser:
+
+- Embedded resources (`Assembly.GetManifestResourceStream`: MtG API's item ID maps, the mods' sprites) are null on
+  WebGL: IL2CPP reads them from `<data dir>/Resources/<Assembly>.dll-resources.dat` and Unity 2017's WebGL packager
+  leaves those files out (the game's own dfScriptLite has one too). `ModBaker resources` writes them in il2cpp's
+  format and the mod pack unpacks them to `/Il2CppData/Resources` (absolute entries) before the plugins start.
+- The Chainloader starts on the `sceneLoaded` of the game's first scene (LoadingDungeon), not in Boot: MtG API's SGUI
+  takes its font from `dfControl.ActiveInstances[0]` on its first OnGUI, fails without one and stays broken.
+- Alexandria's `PlayerController.Update` manipulator passes `this` to a method taking a SpeculativeRigidbody (meant
+  another method; on Mono it works because only `.gameObject` is used). IL2CPP's C++ doesn't compile that:
+  `ArgumentFixer` turns such a component argument into `GetComponent<Expected>()` (same GameObject, same result).
+- Unity 2017's mcs (IKVM reader) rejects any assembly with custom attributes on generic constraints (C# 8
+  nullability, Newtonsoft.Json) with CS0009, which stops every script compile: the patcher removes them. It also stubs
+  Newtonsoft's `JsonTypeReflector.DynamicCodeGeneration` to false (no Reflection.Emit on IL2CPP).
+- `LogSwallowedExceptions` (patcher): `catch { }` blocks of chosen mod methods log what they discard.
+
+- Engine generic overloads that call a patched method (`Instantiate<T>(T, Vector3, Quaternion)` is
+  `(T)Instantiate((Object)original, ...)`) are patched along with it in the game; here they get copies in the mod
+  (`Object_Instantiate_GN`, body from the engine, inner call -> wrapper) and their callers go there. Without it the
+  game's projectile spawns skipped Alexandria's FakePrefab postfix: mod guns fired, their projectiles stayed inactive.
+
+Play Mode (`EtG Web/Play From Boot`) runs the mods without a WebGL build: Boot unpacks nothing in the editor, the
+Chainloader reads `etg/mods-runtime/`. Mono there checks member access (MethodAccessException; IL2CPP doesn't), and
+baked code calls private members of other assemblies: the game calls the mods' private patch methods, reverse patch
+copies call the game's internals, and the mods read the game's private fields directly (built against a publicized
+Assembly-CSharp). `AccessFixer` routes each such use through a public trampoline `ModBaker.Access.*` in the member's
+own assembly (the members keep their visibility, so reflection with NonPublic still finds them).

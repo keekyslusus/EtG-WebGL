@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 # Builds WebShim + Patcher, patches the game's original assemblies and installs
 # everything into the AssetRipper-exported Unity project. Safe to re-run.
+#   ./apply.sh          vanilla game (removes mods a previous --mods run installed)
+#   ./apply.sh --mods   with the mods of mods/modpack.txt baked in (ModBaker, see README "Mods")
 set -euo pipefail
+
+MODS=0
+if [ "${1:-}" = "--mods" ]; then
+    MODS=1
+fi
 
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
@@ -16,7 +23,14 @@ dotnet build "$PORT/Patcher" -c Release -o "$PORT/build/Patcher" -nologo -v q
 echo "== Patching assemblies (originals are read from the game folder, never modified)"
 mkdir -p "$PORT/build/patched"
 rm -f "$PORT/build/patched/"*.dll   # clear contents only; the folder itself may be held open on Windows
-dotnet "$PORT/build/Patcher/Patcher.dll" "$MANAGED" "$PORT/build/WebShim/WebShim.dll" "$PORT/build/patched"
+if [ "$MODS" = 1 ]; then
+    echo "== Baking mods (mods/modpack.txt)"
+    [ -d "$ROOT/mods" ] || bash "$PORT/mods/fetch_mods.sh"
+    bash "$PORT/ModBaker/bake.sh"
+    dotnet "$PORT/build/Patcher/Patcher.dll" "$MANAGED" "$PORT/build/WebShim/WebShim.dll" "$PORT/build/patched" "$PORT/build/modbaked"
+else
+    dotnet "$PORT/build/Patcher/Patcher.dll" "$MANAGED" "$PORT/build/WebShim/WebShim.dll" "$PORT/build/patched"
+fi
 
 echo "== Verifying every reference resolves against the WebGL player libraries"
 UNITY_DATA="${UNITY_DATA:-/c/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Data}"
@@ -43,7 +57,32 @@ for pair in "Assembly-CSharp-firstpass:EtgGameFirstpass" "Assembly-CSharp:EtgGam
     fi
     rm -f "$PLUGINS/$old.dll"
 done
+# Mods and their libraries from a previous --mods run (a hidden file: Unity doesn't import it).
+MOD_LIST="$PLUGINS/.mod-dlls"
+if [ -f "$MOD_LIST" ]; then
+    while read -r dll; do rm -f "$PLUGINS/$dll" "$PLUGINS/$dll.meta"; done < "$MOD_LIST"
+    rm -f "$MOD_LIST"
+fi
 cp -f "$PORT/build/patched/"*.dll "$PLUGINS/"
+MODS_ASSETS="$PROJECT/Assets/StreamingAssets/mods"
+if [ "$MODS" = 1 ]; then
+    # Everything the patcher wrote that isn't one of the game's own assemblies.
+    ( cd "$PORT/build/modbaked" && ls *.dll ) | grep -vxE 'Assembly-CSharp(-firstpass)?\.dll|Assembly-UnityScript\.dll|dfScriptLite\.dll|SonyNP\.dll|SonyPS4SavedGames\.dll|PlayMaker\.dll|ConditionalExpression\.dll|GalaxyCSharp\.dll' > "$MOD_LIST"
+    echo "   mods: $(tr '\n' ' ' < "$MOD_LIST")"
+    # The chainloader is found with Type.GetType - keep the mods whole through UnityLinker.
+    mkdir -p "$PROJECT/Assets/EtgMods"
+    { echo '<linker>'; sed -E 's/^(.*)\.dll$/  <assembly fullname="\1" preserve="all"\/>/' "$MOD_LIST"; echo '</linker>'; } > "$PROJECT/Assets/EtgMods/link.xml"
+    echo "== Packing mod files"
+    rm -rf "$PORT/build/il2cpp-resources"
+    "$PORT/build/ModBaker/ModBaker.exe" resources "$PORT/build/patched" "$PORT/build/il2cpp-resources"
+    python "$PORT/mods/build_pack.py" "$PORT/mods/modpack.txt" "$ROOT/mods" "$MODS_ASSETS/files.pack" "$ROOT/mods-runtime" "$PORT/build/il2cpp-resources"
+    if [ -d "$ROOT/webbuild/StreamingAssets" ]; then
+        mkdir -p "$ROOT/webbuild/StreamingAssets/mods"
+        cp -f "$MODS_ASSETS/files.pack" "$ROOT/webbuild/StreamingAssets/mods/"
+    fi
+else
+    rm -rf "$MODS_ASSETS" "$MODS_ASSETS.meta" "$PROJECT/Assets/EtgMods" "$PROJECT/Assets/EtgMods.meta"
+fi
 cp -rf "$PORT/UnityAssets/." "$PROJECT/Assets/"
 
 # Replace AssetRipper's dummy shaders with USCSandbox-decompiled ones (decompile_shaders.sh),

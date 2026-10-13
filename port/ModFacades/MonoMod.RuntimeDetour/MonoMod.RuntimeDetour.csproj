@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>MonoMod.RuntimeDetour</AssemblyName>
+    <RootNamespace>MonoMod.RuntimeDetour</RootNamespace>
+    <AssemblyVersion>22.3.23.4</AssemblyVersion>
+  </PropertyGroup>
+</Project>

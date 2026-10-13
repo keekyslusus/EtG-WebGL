@@ -1,0 +1,6 @@
+# Thunderstore packages baked into the web build (namespace-name version), in load order of dependencies.
+# fetch_mods.sh copies them from the r2modman cache into etg/mods/ (outside git: third-party binaries).
+BepInEx-BepInExPack_EtG 5.4.2101
+MtG_API-Mod_the_Gungeon_API 1.9.2
+Alexandria-Alexandria 0.5.11
+SilverJacketTeam-SilverJacket 1.1.1

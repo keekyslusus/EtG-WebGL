@@ -144,6 +144,30 @@ namespace WebShim
             return scenes.ToArray();
         }
 
+        public static string[] GetAllAssetNames(AssetBundle bundle)
+        {
+            string simulated = SimulatedName(bundle);
+            if (simulated == null)
+            {
+                return bundle.GetAllAssetNames();
+            }
+            List<string> names = new List<string>();
+            foreach (string path in EditorAssets.PathsInBundle(simulated))
+            {
+                names.Add(path.ToLowerInvariant());
+            }
+            return names.ToArray();
+        }
+
+        /// <summary>
+        /// BuildTarget written into the AssetBundles Alexandria's PrefabAPI builds at runtime (it writes
+        /// StandaloneWindows64 = 19); a WebGL player only loads bundles made for WebGL (20).
+        /// </summary>
+        public static int RuntimeBundleTargetPlatform()
+        {
+            return Application.platform == RuntimePlatform.WebGLPlayer ? 20 : 19;
+        }
+
         // ---- Simulation ----
 
         // Placeholders have no native object, so UnityEngine.Object's == calls them null and its

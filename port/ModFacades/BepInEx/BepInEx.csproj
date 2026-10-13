@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>BepInEx</AssemblyName>
+    <RootNamespace>BepInEx</RootNamespace>
+    <AssemblyVersion>5.4.21.0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManaged)UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <ProjectReference Include="..\..\WebShim\WebShim.csproj" Private="false" />
+  </ItemGroup>
+</Project>
