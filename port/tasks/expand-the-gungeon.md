@@ -74,9 +74,20 @@ Windows.
 - Загрузка: `ExpandAssets.LoadFromModZIPOrModFolder` → `AssetBundle.LoadFromFile(FilePath + "/" + name)` (или
   Ionic.Zip + `AssetBundle.LoadFromStream`, если мод лежит zip-ом — Patcher этот вызов пока считает
   необработанным), `LoadAssetBundleFromResource` → `LoadFromMemory`. Бандлы Windows-сборки WebGL не загрузит.
-- Нужно пересобрать их как WebGL-бандлы тем же путём, что и бандлы игры: AssetRipper → проект, шейдеры через
-  USCSandbox (`port/decompile_shaders.sh`, `port/fix_shaders.py`, их проверки — shaderdiff/abtest), пометить
-  ассеты именами бандлов, собрать шагом «EtG Web/3», научить `BundleShim` (список, предзагрузка в Boot, отдача
+- **Исходники всех бандлов есть в репозитории мода** (ветка BepInEx): `ExpandAssets/` — Unity-проект
+  (2017.4.40f1) с префабами, комнатами, спрайтами, текстурами и Wwise-проектом, из которого собираются
+  `expandsharedauto` и `expandaudio`; `ExpandShaders/` — проект с 8 шейдерами в исходниках (`ExpandGlitchBasic`,
+  `ExpandGlitchScreen`, `ExpandCRT`, `ExpandScanlines`, `ExpandVHSPostProcessEffect`, `ExpandCinematic`,
+  `ExpandChromaKey`, `ExpandBlendTextures`). `UpdateAssetBundles.cmd` показывает, что куда копируется.
+  Значит, бандлы надо **собрать из исходников под WebGL** (своим Unity 2017.4.27f1 или в отдельном проекте),
+  а не ripать AssetRipper'ом: никакой декомпиляции шейдеров.
+- Шейдеры из исходников: артефактов декомпилятора (то, ради чего был shaderdiff) не будет, и большинство
+  различий D3D11/GLES Unity снимает сам при компиляции под платформу. Остаются ошибки самого исходника,
+  которые на D3D не видны: переворот UV у пост-эффектов с render texture (`ExpandGlitchScreen`, `ExpandVHS…`,
+  `ExpandCRT`, `ExpandScanlines`), точность `half`/`fixed` (на GLES — mediump/lowp), `#pragma target` выше 3.5.
+  Полный shaderdiff не нужен; достаточно прогнать эти 8 шейдеров через A/B-галерею (`bash port/abtest.sh`,
+  `EtgAbTest.cs`) D3D11 vs GLES и посмотреть эффекты в браузере глазами.
+- Дальше как с бандлами игры: собранные WebGL-бандлы научить `BundleShim` (список, предзагрузка в Boot, отдача
   по `LoadFromFile`/`LoadFromStream`/`LoadFromMemory`) и Play Mode (имитация).
 - MonoBehaviour мода в префабах ссылаются на классы `ExpandTheGungeon.dll`: у DLL в `Assets/Plugins` должен быть
   стабильный GUID (`.meta`) до экспорта/сборки, иначе скрипты в префабах потеряются.
