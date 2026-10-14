@@ -20,7 +20,7 @@ namespace EtgWebPatcher;
 /// The optional mods dir (port/ModBaker output) holds game assemblies with the mods baked in, which
 /// replace the originals, and the mods with their runtime libraries, which are patched as well.
 /// </summary>
-internal static class Program
+internal static partial class Program
 {
     // Assemblies we own the patching of. Everything else (UnityEngine.*, System.*, mscorlib)
     // is supplied by the Unity editor at build time and must not be touched.
@@ -66,6 +66,14 @@ internal static class Program
         // Newtonsoft.Json (shipped with Mod the Gungeon API) compiles DynamicMethods when it thinks it may;
         // IL2CPP has no Reflection.Emit. false = its late-bound reflection path.
         ("Newtonsoft.Json.Serialization.JsonTypeReflector", "get_DynamicCodeGeneration"),
+        // Ionic.Zip (Mod the Gungeon API's folder, needed by Expand the Gungeon): self-extracting archives compile
+        // their stub with CodeDom, and debug tracing sets console colours - neither exists in the WebGL profile.
+        ("Ionic.Zip.ZipFile", "_SaveSfxStub"),
+        ("Ionic.Zip.ZipEntry", "TraceWriteLine"),
+        ("Ionic.Zip.WinZipAesCipherStream", "TraceOutput"),
+        ("Ionic.BZip2.BZip2OutputStream", "TraceOutput"),
+        ("Ionic.BZip2.ParallelBZip2OutputStream", "TraceOutput"),
+        ("Ionic.Zlib.ParallelDeflateOutputStream", "TraceOutput"),
     };
 
     // Static methods whose body becomes a call to the WebShim method of the same name and signature.
@@ -98,6 +106,15 @@ internal static class Program
     {
         "InControl.InControlManager::OnEnable",
         "InControl.XInputDeviceManager::CheckPlatformSupport",
+    };
+
+    // Methods whose Application.platform reads see WindowsPlayer on WebGL (MediaShim.PlatformAsWindows): code that
+    // only runs on Windows in the Steam game and works in the browser too. Expand the Gungeon's old-film overlay
+    // (VHSOldFilm: a chroma-keyed video pass) is Windows-only.
+    private static readonly HashSet<string> WindowsPlatformChecks = new()
+    {
+        "ExpandTheGungeon.ExpandComponents.ExpandScreenFXController::Start",
+        "ExpandTheGungeon.ExpandComponents.ExpandScreenFXController::OnDestroy",
     };
 
     // Integer literals in mod code replaced by a WebShim call (same value type), found by the literal and
@@ -165,6 +182,9 @@ internal static class Program
             targets.AddRange(Directory.GetFiles(modsDir, "*.dll").Select(Path.GetFileName)
                 .Where(n => !targets.Contains(n, StringComparer.OrdinalIgnoreCase) && !n!.Equals(Path.GetFileName(shimPath), StringComparison.OrdinalIgnoreCase))!);
         }
+        var inputs = targets.Select(n => modsDir != null && File.Exists(Path.Combine(modsDir, n)) ? Path.Combine(modsDir, n) : Path.Combine(managedDir, n))
+            .Where(File.Exists).ToList();
+        var callerAssemblyUsers = CollectCallerAssemblyUsers(inputs, readParams);
         bool ok = true;
         foreach (string name in targets)
         {
@@ -179,6 +199,7 @@ internal static class Program
             foreach (var module in asm.Modules)
             {
                 PatchModule(module, shimApi, report);
+                PassCallerAssembly(module, callerAssemblyUsers, shimApi, report);
                 RetargetStubbedUnityTypes(module, shimApi, report);
                 RenameReservedAssemblies(asm, module, report);
             }
@@ -426,6 +447,16 @@ internal static class Program
                         missingMembers[key] = missingMembers.GetValueOrDefault(key) + 1;
                     }
                 }
+                // A branch whose target isn't an instruction (a short branch pushed out of range by inserted code
+                // reads back as null): il2cpp dies on it with a NullReferenceException in its control flow graph.
+                foreach (var method in AllTypes(module).SelectMany(t => t.Methods).Where(m => m.HasBody))
+                {
+                    if (method.Body.Instructions.Any(i => i.OpCode.OperandType is OperandType.InlineBrTarget or OperandType.ShortInlineBrTarget && i.Operand == null
+                        || i.OpCode.OperandType == OperandType.InlineSwitch && (i.Operand as Instruction[])?.Any(t => t == null) != false))
+                    {
+                        missingMembers[$"  broken branch target in {method.FullName}"] = 1;
+                    }
+                }
             }
             if (missingAssemblies.Count + missingTypes.Count + missingMembers.Count == 0)
             {
@@ -654,13 +685,23 @@ internal static class Program
                     };
                     break;
 
+                case "System.Threading.ThreadPool":
+                    replacement = sig == "QueueUserWorkItem(System.Threading.WaitCallback,System.Object)"
+                        ? shim.Thread("QueueUserWorkItem", "System.Threading.WaitCallback", "System.Object")
+                        : Unhandled(report, $"ThreadPool.{sig} in {where}");
+                    break;
+
                 case "UnityEngine.AssetBundle":
                     if (!target.HasThis)
                     {
                         // LoadFromMemory works as is (Alexandria's PrefabAPI, see LiteralShims).
-                        replacement = sig == "LoadFromFile(System.String)"
-                            ? shim.Bundle("LoadFromFile", "System.String")
-                            : target.Name.StartsWith("LoadFrom") && sig != "LoadFromMemory(System.Byte[])" ? Unhandled(report, $"AssetBundle.{sig} in {where}") : null;
+                        replacement = sig switch
+                        {
+                            "LoadFromFile(System.String)" => shim.Bundle("LoadFromFile", "System.String"),
+                            "LoadFromStream(System.IO.Stream)" => shim.Bundle("LoadFromStream", "System.IO.Stream"),
+                            "LoadFromMemory(System.Byte[])" => null,
+                            _ => target.Name.StartsWith("LoadFrom") ? Unhandled(report, $"AssetBundle.{sig} in {where}") : null,
+                        };
                         break;
                     }
                     // Instance calls become BundleShim.X(bundle, args) so the editor's Play Mode can
@@ -727,6 +768,7 @@ internal static class Program
                     {
                         "get_persistentDataPath()" => shim.File("PersistentDataPath"),
                         "get_platform()" when XInputPlatformChecks.Contains(where) => shim.XInput("PlatformForXInput"),
+                        "get_platform()" when WindowsPlatformChecks.Contains(where) => shim.Media("PlatformAsWindows"),
                         _ => null,
                     };
                     break;
@@ -741,12 +783,24 @@ internal static class Program
                     replacement = sig == "get_resolutions()" ? shim.Screen("GetResolutions") : null;
                     break;
 
-                case "UnityEngine.WWW":
-                    replacement = sig == "GetMovieTexture()" ? shim.Media("GetMovieTexture", "UnityEngine.WWW") : null;
+                case "UnityEngine.Renderer":
+                    // Play Mode: a simulated bundle's prefab is an asset, whose `material` the editor refuses (EditorPrefabShim).
+                    replacement = sig switch
+                    {
+                        "get_material()" => shim.Find("WebShim.EditorPrefabShim", "GetMaterial", ["UnityEngine.Renderer"]),
+                        "get_materials()" => shim.Find("WebShim.EditorPrefabShim", "GetMaterials", ["UnityEngine.Renderer"]),
+                        _ => null,
+                    };
                     break;
 
-                case "System.Threading.ThreadPool":
-                    Unhandled(report, $"ThreadPool.{sig} in {where}");
+                case "UnityEngine.Video.VideoPlayer":
+                    replacement = sig == "set_clip(UnityEngine.Video.VideoClip)"
+                        ? shim.Media("SetVideoClip", "UnityEngine.Video.VideoPlayer", "UnityEngine.Video.VideoClip")
+                        : null;
+                    break;
+
+                case "UnityEngine.WWW":
+                    replacement = sig == "GetMovieTexture()" ? shim.Media("GetMovieTexture", "UnityEngine.WWW") : null;
                     break;
             }
 

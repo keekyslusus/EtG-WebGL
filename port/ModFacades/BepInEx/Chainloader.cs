@@ -50,6 +50,11 @@ namespace BepInEx.Bootstrap
             Paths.ExecutablePath = Path.Combine(gameRootPath, "EtG.exe");
             Directory.CreateDirectory(Path.Combine(gameRootPath, "Resources"));
             Directory.CreateDirectory(Paths.ConfigPath);
+            // Folders mods write into without creating them. Silver Jacket saves its item stats to
+            // <game root>/SilverJacketData/ItemStats.json on every pickup of its items, but only its `slvjckt read_stats`
+            // console command creates the folder: without it the pickup throws out of PlayerController's input handling
+            // and the player stops responding.
+            Directory.CreateDirectory(Path.Combine(gameRootPath, "SilverJacketData"));
 
             ManagerObject = new GameObject("BepInEx_Manager");
             UnityEngine.Object.DontDestroyOnLoad(ManagerObject);

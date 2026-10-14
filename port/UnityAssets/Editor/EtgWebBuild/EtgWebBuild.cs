@@ -72,7 +72,9 @@ public static class EtgWebBuild
 
         // AssetRipper leaves this empty; 2017.4's WebGL postprocessor crashes on template.Split(':')[1].
         PlayerSettings.WebGL.template = "APPLICATION:Default";
-        PlayerSettings.WebGL.memorySize = 1536;
+        // The wasm heap is fixed at build time (the module declares its maximum). 2032 MB is 2017.4's limit;
+        // 1536 ran out while Expand the Gungeon built its room prefabs at start.
+        PlayerSettings.WebGL.memorySize = 2032;
         // EtG logs a lot every frame (e.g. "Unable to find clip 'select_idle'"); building a managed
         // stack trace for each Log/Warning is what makes that expensive in the browser.
         PlayerSettings.SetStackTraceLogType(LogType.Log, StackTraceLogType.None);

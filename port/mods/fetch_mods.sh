@@ -11,5 +11,12 @@ grep -vE '^\s*(#|$)' "$HERE/modpack.txt" | while read -r pkg ver; do
     [ -d "$src" ] || { echo "missing $src (install it with r2modman first)" >&2; exit 1; }
     rm -rf "$OUT/$pkg"
     cp -r "$src" "$OUT/$pkg"
+    # A package without a plugins/ folder (Expand the Gungeon) has its files at the top level;
+    # r2modman installs those into BepInEx/plugins/<package>/ as well. Same layout here.
+    if [ "$pkg" != "BepInEx-BepInExPack_EtG" ] && [ ! -d "$OUT/$pkg/plugins" ]; then
+        mkdir "$OUT/$pkg/plugins"
+        find "$OUT/$pkg" -mindepth 1 -maxdepth 1 ! -name plugins ! -name manifest.json ! -name README.md \
+            ! -name CHANGELOG.md ! -name icon.png -exec mv {} "$OUT/$pkg/plugins/" \;
+    fi
     echo "   $pkg $ver"
 done

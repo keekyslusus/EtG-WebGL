@@ -44,6 +44,7 @@ internal static class Ak
     [DllImport(Dll)] public static extern int CSharp_UnregisterGameObjInternal(ulong obj);
     [DllImport(Dll)] public static extern int CSharp_SetCurrentLanguage([MarshalAs(W)] string lang);
     [DllImport(Dll)] public static extern int CSharp_LoadBank__SWIG_0([MarshalAs(W)] string name, int pool, out uint bankId);
+    [DllImport(Dll)] public static extern int CSharp_LoadAndDecodeBankFromMemory(IntPtr data, uint size, bool decode, [MarshalAs(W)] string name, bool saveDecoded, out uint bankId);
     [DllImport(Dll)] public static extern int CSharp_RegisterGameObjInternal(ulong obj);
     [DllImport(Dll)] public static extern int CSharp_AddDefaultListener(ulong obj);
     [DllImport(Dll)] public static extern int CSharp_SetObjectPosition(ulong obj, float x, float y, float z, float fx, float fy, float fz, float ux, float uy, float uz);

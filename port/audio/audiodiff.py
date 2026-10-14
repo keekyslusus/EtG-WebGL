@@ -3,6 +3,7 @@
     python port/audio/audiodiff.py                 # everything: cases, Wwise, browser, report
     python port/audio/audiodiff.py --filter Gun    # only cases whose name matches a regex
     python port/audio/audiodiff.py --report-only   # recompute the report from existing features
+    python port/audio/audiodiff.py --mods          # the baked mods' events (their banks loaded on both sides)
     options: --skip-ref, --skip-ours, --resume (render only cases without features), --repeats N
              (random cases), --jobs N (browser tabs), --listen N (flagged cases re-rendered with
              audio for the report), --out DIR
@@ -48,9 +49,26 @@ import audiodiff_cases  # noqa: E402
 import audiodiff_features  # noqa: E402
 
 
-def write_cases(out: Path, pattern, repeats):
+def mod_banks():
+    """The baked mods' banks (build_audio.py --mods input), for WwiseRef."""
+    return sorted(str(p) for p in (PORT_DIR / "build" / "audio" / "mods").glob("*/*.bnk"))
+
+
+def write_cases(out: Path, pattern, repeats, mods=False):
     doc = json.loads((WEBAUDIO / "audio.json").read_text(encoding="utf-8"))
+    mod_events = set()
+    if mods:
+        # The mods' events only, over the game's data (their sounds use the game's busses), as the engine merges them.
+        for d in json.loads((WEBAUDIO / "mods.json").read_text(encoding="utf-8")):
+            mod = json.loads((WEBAUDIO / d / "audio.json").read_text(encoding="utf-8"))
+            for key in ("events", "nodes", "media", "names"):
+                doc[key].update(mod[key])
+            mod_events |= {int(e) for e in mod["events"]}
     cases, reset = audiodiff_cases.make_cases(doc, repeats)
+    if mods:
+        # At the game's default volume options (80): Expand the Gungeon's VOL_SFX curves mute its sounds at 100.
+        reset["rtpcs"] = [[rtpc, 80.0] for rtpc, _ in reset["rtpcs"]]
+        cases = [c for c in cases if any(s["op"] == "postEvent" and s["args"][0] in mod_events for s in c["steps"])]
     if pattern:
         rx = re.compile(pattern)
         cases = [c for c in cases if rx.search(c["name"])]
@@ -73,7 +91,8 @@ def render_ref(out: Path, ids, wav_dir: Path, keep_audio=False, feat_dir: Path =
     done = 0
 
     def render(batch):
-        subprocess.run([str(WWISEREF), str(ROOT), str(out / "cases.json"), str(wav_dir), "--only", ",".join(batch)],
+        banks = ["--bank", ",".join(mod_banks())] if (out / "mods").exists() else []
+        subprocess.run([str(WWISEREF), str(ROOT), str(out / "cases.json"), str(wav_dir), "--only", ",".join(batch), *banks],
                        check=True, stdout=subprocess.DEVNULL)
         if feat_dir:
             for cid in batch:
@@ -217,15 +236,21 @@ def main():
     ap.add_argument("--skip-ours", action="store_true")
     ap.add_argument("--report-only", action="store_true")
     ap.add_argument("--resume", action="store_true", help="keep existing features, render only what is missing")
-    ap.add_argument("--out", default=str(PORT_DIR / "build" / "audiodiff"))
+    ap.add_argument("--out", default=None)
+    ap.add_argument("--mods", action="store_true", help="the baked mods' events (build_audio.py --mods), default out build/audiodiff-mods")
     args = ap.parse_args()
-    out = Path(args.out)
+    out = Path(args.out or PORT_DIR / "build" / ("audiodiff-mods" if args.mods else "audiodiff"))
     out.mkdir(parents=True, exist_ok=True)
+    marker = out / "mods"  # WwiseRef loads the mods' banks too
+    if args.mods:
+        marker.write_text("\n".join(mod_banks()), encoding="utf-8")
+    elif marker.exists():
+        marker.unlink()
     feats = {"ref": out / "features" / "ref", "ours": out / "features" / "ours"}
 
     if not args.report_only:
         print("== Cases")
-        cases = write_cases(out, args.filter, args.repeats)
+        cases = write_cases(out, args.filter, args.repeats, args.mods)
         ids = [c["id"] for c in cases]
         for side in feats:
             if not args.resume:

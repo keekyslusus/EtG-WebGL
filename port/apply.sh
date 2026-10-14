@@ -72,23 +72,43 @@ if [ -f "$MOD_LIST" ]; then
 fi
 cp -f "$PORT/build/patched/"*.dll "$PLUGINS/"
 MODS_ASSETS="$PROJECT/Assets/StreamingAssets/mods"
+# Assets of the mods' own AssetBundles from a previous --mods run (mods/mod_bundles.py; with --mods it updates
+# them in place, so Unity reimports only what changed).
+if [ "$MODS" != 1 ] && [ -f "$PROJECT/Assets/.mod-assets" ]; then
+    while read -r d; do [ -n "$d" ] && rm -rf "$PROJECT/Assets/$d" "$PROJECT/Assets/$d.meta"; done < "$PROJECT/Assets/.mod-assets"
+    rm -f "$PROJECT/Assets/.mod-assets"
+fi
 if [ "$MODS" = 1 ]; then
     # Everything the patcher wrote that isn't one of the game's own assemblies.
     ( cd "$PORT/build/modbaked" && ls *.dll ) | grep -vxE 'Assembly-CSharp(-firstpass)?\.dll|Assembly-UnityScript\.dll|dfScriptLite\.dll|SonyNP\.dll|SonyPS4SavedGames\.dll|PlayMaker\.dll|ConditionalExpression\.dll|GalaxyCSharp\.dll' > "$MOD_LIST"
     echo "   mods: $(tr '\n' ' ' < "$MOD_LIST")"
+    # Fixed GUIDs (md5 of "etgmod:<file>", as mods/mod_bundles.py computes them): the mods' prefabs in the
+    # project reference their scripts through the DLL's GUID. Unity fills in the rest of the importer settings.
+    while read -r dll; do
+        printf 'fileFormatVersion: 2\nguid: %s\n' "$(printf 'etgmod:%s' "$dll" | md5sum | cut -c1-32)" > "$PLUGINS/$dll.meta"
+    done < "$MOD_LIST"
     # The chainloader is found with Type.GetType - keep the mods whole through UnityLinker.
     mkdir -p "$PROJECT/Assets/EtgMods"
     { echo '<linker>'; sed -E 's/^(.*)\.dll$/  <assembly fullname="\1" preserve="all"\/>/' "$MOD_LIST"; echo '</linker>'; } > "$PROJECT/Assets/EtgMods/link.xml"
+    echo "== Mod AssetBundle sources -> project (mods/mod_bundles.py)"
+    python "$PORT/mods/mod_bundles.py" "$PORT/mods/modpack.txt" "$ROOT/mods" "$ROOT/tools/src" "$PROJECT/Assets" "$PORT/build/audio/mods"
+    echo "== Mod sound banks -> webaudio/mods (audio/build_audio.py --mods)"
+    python "$PORT/audio/build_audio.py" --mods "$PORT/build/audio/mods"
     echo "== Packing mod files"
     rm -rf "$PORT/build/il2cpp-resources"
     "$PORT/build/ModBaker/ModBaker.exe" resources "$PORT/build/patched" "$PORT/build/il2cpp-resources"
     python "$PORT/mods/build_pack.py" "$PORT/mods/modpack.txt" "$ROOT/mods" "$MODS_ASSETS/files.pack" "$ROOT/mods-runtime" "$PORT/build/il2cpp-resources"
     if [ -d "$ROOT/webbuild/StreamingAssets" ]; then
+        # files.pack and the mods' videos (StreamingAssets/mods/video)
+        rm -rf "$ROOT/webbuild/StreamingAssets/mods"
         mkdir -p "$ROOT/webbuild/StreamingAssets/mods"
-        cp -f "$MODS_ASSETS/files.pack" "$ROOT/webbuild/StreamingAssets/mods/"
+        ( cd "$MODS_ASSETS" && find . -type f ! -name '*.meta' -exec cp --parents -f {} "$ROOT/webbuild/StreamingAssets/mods/" \; )
     fi
 else
-    rm -rf "$MODS_ASSETS" "$MODS_ASSETS.meta" "$PROJECT/Assets/EtgMods" "$PROJECT/Assets/EtgMods.meta"
+    rm -rf "$MODS_ASSETS" "$MODS_ASSETS.meta" "$PROJECT/Assets/EtgMods" "$PROJECT/Assets/EtgMods.meta" "$ROOT/webbuild/StreamingAssets/mods"
+    for d in "$PROJECT/Assets/StreamingAssets/webaudio" "$ROOT/webbuild/StreamingAssets/webaudio"; do
+        rm -rf "$d/mods" "$d/mods.meta" "$d/mods.json" "$d/mods.json.meta"
+    done
 fi
 cp -rf "$PORT/UnityAssets/." "$PROJECT/Assets/"
 
@@ -118,6 +138,20 @@ if [ -d "$SHADERS_OUT" ]; then
 else
     echo "   (no decompiled shaders in $SHADERS_OUT - run decompile_shaders.sh; keeping dummies)"
 fi
+
+# Bundle assets AssetRipper exported under another name ("," -> "_", "_0" copies of Resources assets): a bundle finds
+# an asset by its path or file name, and mods load the game's assets by their original names (bundle_names.py).
+renamed=0
+while IFS=$'\t' read -r from to; do
+    case "$from" in ''|'#'*) continue ;; esac
+    if [ -f "$PROJECT/$from" ]; then
+        mkdir -p "$(dirname "$PROJECT/$to")"
+        mv -f "$PROJECT/$from" "$PROJECT/$to"
+        mv -f "$PROJECT/$from.meta" "$PROJECT/$to.meta"
+        renamed=$((renamed + 1))
+    fi
+done < "$PORT/bundle_renames.tsv"
+[ "$renamed" = 0 ] || echo "   bundle assets renamed to their original names: $renamed"
 
 # A few prefabs serialize assembly-qualified type names (PlayMaker variables).
 { grep -rlE 'Assembly-(CSharp|UnityScript)' "$PROJECT/Assets" --include=*.prefab --include=*.asset --include=*.unity 2>/dev/null || true; } |

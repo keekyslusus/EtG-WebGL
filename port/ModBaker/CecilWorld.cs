@@ -27,6 +27,21 @@ internal sealed class CecilWorld : IAssemblyResolver
         _dllByName = dllByName;
     }
 
+    private readonly List<ModuleDefinition> _facades = new();
+
+    /// <summary>port/ModFacades: what the baked code calls that only the web build's stand-ins have
+    /// (MonoMod.RuntimeDetour.BakedHook). The real BepInEx assemblies stay loaded for HarmonyX here.</summary>
+    public void AddFacades(string dir)
+    {
+        foreach (string dll in Directory.GetFiles(dir, "*.dll"))
+        {
+            _facades.Add(ModuleDefinition.ReadModule(dll, new ReaderParameters { AssemblyResolver = this, InMemory = true }));
+        }
+    }
+
+    public TypeDefinition FacadeType(string fullName) =>
+        _facades.Select(m => m.GetType(fullName)).FirstOrDefault(t => t != null) ?? throw new InvalidOperationException("not in the facades: " + fullName);
+
     public void MarkWritable(string name) => _writable.Add(name);
     public bool IsWritable(string name) => _writable.Contains(name) && _dllByName.ContainsKey(name);
     public void MarkModified(ModuleDefinition module) => _modified.Add(module.Assembly.Name.Name);
@@ -102,7 +117,7 @@ internal sealed class CecilWorld : IAssemblyResolver
             var exported = module?.ExportedTypes.FirstOrDefault(x => x.Namespace == t.Namespace && x.Name == t.Name);
             if (exported != null) return exported.Resolve();
         }
-        return null;
+        return _facades.Where(m => m.Assembly.Name.Name == scope).Select(m => m.GetType(t.Namespace, t.Name)).FirstOrDefault(d => d != null);
     }
 
     AssemblyDefinition IAssemblyResolver.Resolve(AssemblyNameReference name) => TryModule(name.Name)?.Assembly;

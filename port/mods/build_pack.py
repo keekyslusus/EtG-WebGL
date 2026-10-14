@@ -7,7 +7,9 @@ layout r2modman installs, both in:
     UTF-8 path, int32 size, bytes; little endian);
   - <runtime dir>: the same tree on disk for the editor's Play Mode.
 DLLs become empty placeholders: their code is baked into the build, but mods look for their own
-folder through their DLL's location.
+folder through their DLL's location. So do AssetBundles (Windows builds, WebGL can't load them): the
+web build has its own copies built from the mod's sources (mod_bundles.py), which WebShim.BundleShim
+hands out when the mod loads the file - mods only check that it exists.
 
 Entries with an absolute path go to that place in the file system: the IL2CPP resource files
 (ModBaker resources) under /Il2CppData/Resources, only for the web build.
@@ -41,11 +43,10 @@ def main(modpack, mods_dir, pack_path, runtime_dir, resources_dir=None):
                 full = os.path.join(dirpath, name)
                 rel = os.path.relpath(full, src).replace(os.sep, "/")
                 target = f"BepInEx/plugins/{pkg}/{rel}"
-                if name.lower().endswith(".dll"):
+                with open(full, "rb") as f:
+                    data = f.read()
+                if name.lower().endswith(".dll") or data.startswith(b"UnityFS"):
                     data = b""
-                else:
-                    with open(full, "rb") as f:
-                        data = f.read()
                 entries.append((target, data))
 
     files = list(entries)

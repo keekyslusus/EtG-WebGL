@@ -98,6 +98,43 @@ internal sealed class Redirector
         }
     }
 
+    /// <summary>
+    /// The wrapper calls to an engine/BCL method go to (HookBaker: a MonoMod hook on such a method hooks the
+    /// wrapper): the Harmony one if the method is patched, else a new one in `host` that just calls it.
+    /// </summary>
+    public static MethodDefinition WrapperFor(CecilWorld world, MethodDefinition origDef, ModuleDefinition host)
+    {
+        if (Wrappers.TryGetValue(Key(origDef), out var existing)) return existing;
+        if (!origDef.IsStatic || origDef.HasGenericParameters)
+        {
+            throw new NotSupportedException("only non-generic static engine/BCL methods can be redirected");
+        }
+        var holder = host.GetType("ModBaker", "Redirects");
+        if (holder == null)
+        {
+            holder = new TypeDefinition("ModBaker", "Redirects", TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit, host.TypeSystem.Object);
+            host.Types.Add(holder);
+        }
+        if (!Holders.ContainsKey(origDef.DeclaringType))
+        {
+            Holders[origDef.DeclaringType] = holder;
+        }
+        var imp = new Importer(world, host);
+        var wrapper = new MethodDefinition($"{origDef.DeclaringType.Name}_{origDef.Name}_{_counter++}", MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, imp.Type(origDef.ReturnType));
+        foreach (var p in origDef.Parameters)
+        {
+            wrapper.Parameters.Add(new ParameterDefinition(p.Name, ParameterAttributes.None, imp.Type(p.ParameterType)));
+        }
+        holder.Methods.Add(wrapper);
+        var il = wrapper.Body.GetILProcessor();
+        foreach (var p in wrapper.Parameters) il.Emit(OpCodes.Ldarg, p);
+        il.Emit(OpCodes.Call, imp.Method(origDef));
+        il.Emit(OpCodes.Ret);
+        Wrappers[Key(origDef)] = wrapper;
+        world.MarkModified(host);
+        return wrapper;
+    }
+
     // static T Object_Instantiate_Generic<T>(T original) where T : Object => (T)wrapper(original)
     private static MethodDefinition AddGenericInstantiate(ModuleDefinition host, TypeDefinition holder, MethodDefinition wrapper, TypeReference unityObject)
     {

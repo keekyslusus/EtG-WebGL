@@ -1,6 +1,7 @@
 """Converts EtG's Wwise soundbanks into what the browser engine (etg-audio.js) plays.
 
     python port/audio/build_audio.py [--jobs N] [--force]
+    python port/audio/build_audio.py --mods port/build/audio/mods   (the baked mods' banks; apply.sh --mods)
 
 Output (OUT = ripped/ExportedProject/Assets/StreamingAssets/webaudio, mirrored to
 webbuild/StreamingAssets/webaudio when that exists):
@@ -12,6 +13,7 @@ webbuild/StreamingAssets/webaudio when that exists):
   soundboard.html  a test page: post events, set switches/states/volumes without the game
   ir/<bus>.wav  impulse responses of bus effect chains (reverbs), measured by measure_ir.py
   version.txt   build id the loader appends to every URL, so browsers don't keep stale files
+  mods.json, mods/<package>/   the baked mods' banks in the same format (--mods), merged in by the engine
 
 Media goes through vgmstream (Wwise ADPCM / Wwise Vorbis -> WAV) and ffmpeg (-> Opus); the
 encoded files are cached in port/build/audio/enc, so a re-run only rebuilds the JSON.
@@ -134,6 +136,8 @@ def common(o):
     pos = o.get("pos")
     if pos and pos["bits"] & 1:  # positioning overrides the parent's
         n["pos"] = {"3d": bool(pos["bits"] & 0x10), "att": pos.get("attenuation", 0)}
+        if pos["bits"] & 0x10 and not pos["bits3d"] & 3:  # 3D spatialization "None": attenuated, not panned
+            n["pos"]["pan"] = False
     adv = o.get("adv")
     if adv and adv["max_inst"]:
         n["max"] = {"n": adv["max_inst"], "bits": adv["bits"]}
@@ -266,11 +270,12 @@ def hdr_envelope(wem_path, rate):
     return None
 
 
-def read_names():
+def read_names(files=None):
+    """id -> name from Wwise's SoundBank .txt tables (the game's Init.txt and SFX.txt by default)."""
     names = {}
-    for f in ("Init.txt", "SFX.txt"):
+    for path in files or [os.path.join(BANKS, f) for f in ("Init.txt", "SFX.txt")]:
         section = None
-        for line in open(os.path.join(BANKS, f), encoding="latin1"):
+        for line in open(path, encoding="latin1"):
             parts = line.rstrip("\n").split("\t")
             if parts and parts[0]:
                 section = parts[0]
@@ -280,28 +285,11 @@ def read_names():
     return names
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--jobs", type=int, default=os.cpu_count())
-    ap.add_argument("--force", action="store_true", help="re-encode all media")
-    args = ap.parse_args()
-
-    print("== Parsing soundbanks")
-    init = wwbank.parse_bank(os.path.join(BANKS, "Init.bnk"))
-    sfx = wwbank.parse_bank(os.path.join(BANKS, "SFX.bnk"))
-    objects = {**init["objects"], **sfx["objects"]}
-
-    kinds = {}
-    for o in objects.values():
-        if o["type"] == "mtrack":
-            for s in o["sources"]:
-                kinds[s["id"]] = "music"
-
-    print("== Converting media (vgmstream + ffmpeg)")
-    metas = convert_media(sfx, kinds, args.jobs, args.force)
-
-    print("== Writing", OUT)
-    os.makedirs(os.path.join(OUT, "music"), exist_ok=True)
+def write_media(metas, kinds, out, stream_over=None):
+    """Encoded media -> sfx<N>.pack (sound effects, concatenated; the engine loads every pack at start) and
+    music/<id>.ogg (fetched when first played) in out; the media index. stream_over: seconds above which a sound
+    effect goes to its own file too (mods play their music as plain sounds)."""
+    os.makedirs(os.path.join(out, "music"), exist_ok=True)
     media = {}
     packs, pack, pack_size = [], None, 0
     for mid in sorted(metas):
@@ -313,15 +301,15 @@ def main():
         env = hdr_envelope(os.path.join(CACHE, "wem", f"{mid}.wem"), meta["rate"])
         if env:
             entry["env"] = env
-        if kinds.get(mid) == "music":
-            dst = os.path.join(OUT, "music", f"{mid}.ogg")
+        if kinds.get(mid) == "music" or stream_over and meta["samples"] / meta["rate"] > stream_over:
+            dst = os.path.join(out, "music", f"{mid}.ogg")
             if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(src):
                 shutil.copyfile(src, dst)
             entry["file"] = f"music/{mid}.ogg"
         else:
             data = open(src, "rb").read()
             if pack is None or pack_size + len(data) > PACK_SIZE:
-                pack = open(os.path.join(OUT, f"sfx{len(packs)}.pack"), "wb")
+                pack = open(os.path.join(out, f"sfx{len(packs)}.pack"), "wb")
                 packs.append(f"sfx{len(packs)}.pack")
                 pack_size = 0
             pack.write(data)
@@ -330,7 +318,11 @@ def main():
         media[str(mid)] = entry
     if pack:
         pack.close()
+    return media, packs
 
+
+def export_objects(objects):
+    """events, nodes and effects of audio.json from parsed bank objects."""
     events, nodes = {}, {}
     for oid, o in objects.items():
         t = o["type"]
@@ -354,6 +346,87 @@ def main():
             elif o["plugin"] == "delay":
                 e.update(wwbank.delay(o["params"]))
             effects[str(oid)] = e
+    return events, nodes, effects
+
+
+def build_mods(banks_dir, args):
+    """The baked mods' banks (mods/mod_bundles.py extracts them to <banks_dir>/<package>/*.bnk) -> OUT/mods/<package>/
+    (audio.json, packs, music: same format, ids are the banks' own) and OUT/mods.json, the list the engine loads
+    and merges into the game's data at start. Mod banks route into the game's busses, which keep their ids.
+    No banks (a vanilla build): both go."""
+    mods_out = os.path.join(OUT, "mods")
+    if os.path.isdir(mods_out):
+        shutil.rmtree(mods_out)
+    listed = []
+    for pkg in sorted(os.listdir(banks_dir)) if os.path.isdir(banks_dir) else []:
+        files = sorted(f for f in os.listdir(os.path.join(banks_dir, pkg)) if f.endswith(".bnk"))
+        banks = [wwbank.parse_bank(os.path.join(banks_dir, pkg, f)) for f in files]
+        objects = {k: v for b in banks for k, v in b["objects"].items()}
+        kinds = {s["id"]: "music" for o in objects.values() if o["type"] == "mtrack" for s in o["sources"]}
+        print(f"== {pkg}: {', '.join(files)}")
+        metas = {}
+        for b in banks:
+            metas.update(convert_media(b, kinds, args.jobs, args.force))
+        out = os.path.join(mods_out, pkg)
+        media, packs = write_media(metas, kinds, out, stream_over=5)
+        events, nodes, effects = export_objects(objects)
+        tables = [os.path.join(banks_dir, pkg, f[:-4] + ".txt") for f in files]
+        names = read_names([t for t in tables if os.path.exists(t)]) if any(os.path.exists(t) for t in tables) else {}
+        doc = {"version": 1, "effects": effects, "packs": packs, "media": media, "events": events, "nodes": nodes,
+               "names": {str(k): v for k, v in names.items()}}
+        with open(os.path.join(out, "audio.json"), "w", encoding="utf-8") as f:
+            json.dump(doc, f, separators=(",", ":"))
+        size = sum(os.path.getsize(os.path.join(dp, fn)) for dp, _, fns in os.walk(out) for fn in fns)
+        streamed = sum(1 for m in media.values() if "file" in m)
+        print(f"   {len(events)} events, {len(nodes)} nodes, {len(packs)} packs, {streamed} files fetched when played, {size / 1e6:.1f} MB")
+        listed.append(f"mods/{pkg}/")
+    shutil.copyfile(os.path.join(PORT, "audio", "etg-audio.js"), os.path.join(OUT, "etg-audio.js"))  # loads mods.json
+    mods_json = os.path.join(OUT, "mods.json")
+    if listed:
+        with open(mods_json, "w", encoding="utf-8") as f:
+            json.dump(listed, f)
+    elif os.path.exists(mods_json):
+        os.remove(mods_json)
+    write_version()
+    if os.path.isdir(os.path.dirname(WEB_OUT)):
+        print("== Mirroring to", WEB_OUT)
+        shutil.rmtree(os.path.join(WEB_OUT, "mods"), ignore_errors=True)
+        if os.path.isdir(mods_out):
+            shutil.copytree(mods_out, os.path.join(WEB_OUT, "mods"), ignore=shutil.ignore_patterns("*.meta"))
+        for name in ("mods.json", "version.txt", "etg-audio.js"):
+            if os.path.exists(os.path.join(WEB_OUT, name)):
+                os.remove(os.path.join(WEB_OUT, name))
+            if os.path.exists(os.path.join(OUT, name)):
+                shutil.copyfile(os.path.join(OUT, name), os.path.join(WEB_OUT, name))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--force", action="store_true", help="re-encode all media")
+    ap.add_argument("--mods", metavar="BANKS_DIR", help="only (re)build the mods' audio from <BANKS_DIR>/<package>/*.bnk")
+    args = ap.parse_args()
+    if args.mods is not None:
+        build_mods(args.mods, args)
+        return
+
+    print("== Parsing soundbanks")
+    init = wwbank.parse_bank(os.path.join(BANKS, "Init.bnk"))
+    sfx = wwbank.parse_bank(os.path.join(BANKS, "SFX.bnk"))
+    objects = {**init["objects"], **sfx["objects"]}
+
+    kinds = {}
+    for o in objects.values():
+        if o["type"] == "mtrack":
+            for s in o["sources"]:
+                kinds[s["id"]] = "music"
+
+    print("== Converting media (vgmstream + ffmpeg)")
+    metas = convert_media(sfx, kinds, args.jobs, args.force)
+
+    print("== Writing", OUT)
+    media, packs = write_media(metas, kinds, OUT)
+    events, nodes, effects = export_objects(objects)
 
     # Bus reverbs measured in the real Wwise by measure_ir.py (port/build/audio/ir/<bus>.wav).
     reverbs = {}

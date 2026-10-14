@@ -31,6 +31,7 @@ port/
   variant-selection.sh / variant_selection.py   original variant inventory vs actual Unity branch selection
   setstack.py   increases the stack size of an exe (needed for asm2wasm)
   patch_webgl_dedupe.py   lets 2017.4's WebGL release builds through (skips an out-of-memory step)
+  patch_webgl_noasm.py    no asm.js fallback link (2017.4 links the player twice; modded builds overflow 2 GB)
   package.json, tsconfig.json, globals.d.ts   type check of the page JS (see Building)
 ```
 
@@ -72,6 +73,17 @@ port/
    python port/patch_webgl_dedupe.py "<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/UnityEditor.WebGL.Extensions.dll"
    ```
    (skips that step; the page runs the wasm build anyway; the original is kept as `.orig`).
+
+   **Once, for modded builds** (and faster builds in general): 2017.4 links the whole player a second time as an
+   asm.js fallback and then reads that file in one piece; with the mods baked in, the development build's asm.js is
+   3.45 GB and the build fails after two hours ("Reading more than 2GB with this call is not supported"). With Unity
+   closed, as admin:
+   ```
+   python port/patch_webgl_noasm.py "<Unity>/Editor/Data/PlaybackEngines/WebGLSupport/UnityEditor.WebGL.Extensions.dll"
+   ```
+   (no asm.js link and output at all; the asm2wasm step of the wasm link stays). Without admin rights: copy the editor
+   (`cp -r "<Unity>/Editor/../" tools/unity-2017.4.27f1`, 2.8 GB, the patched asm2wasm comes along), patch the copy and
+   build with `tools/unity-2017.4.27f1/Editor/Unity.exe -batchmode ...` - that's how the first modded build was made.
 6. Open `ripped/ExportedProject` in Unity 2017.4.27f1 -> menu **EtG Web -> Do Everything (1-4)**
    (boot scene, WebGL 2 / wasm / .NET 2.0 settings, bundles, dev build into `webbuild/`).
    After that, when the port changes: `apply.sh` -> Ctrl+R in Unity -> **4. Build WebGL Player**.

@@ -17,7 +17,7 @@ using WwiseRef;
 // they fall in. The output is suspended: nothing is played on the sound card.
 if (args.Length < 3)
 {
-    Console.Error.WriteLine("usage: WwiseRef <etg root> <cases.json> <out dir> [--only id,id,...] [--remove-fx bus:index,...] [--remove-node-fx node:index,...]");
+    Console.Error.WriteLine("usage: WwiseRef <etg root> <cases.json> <out dir> [--only id,id,...] [--bank a.bnk,...] [--remove-fx bus:index,...] [--remove-node-fx node:index,...]");
     return 2;
 }
 string root = Path.GetFullPath(args[0]);
@@ -40,6 +40,9 @@ List<(uint Id, uint Index)> FxList(string option)
 }
 var removeFx = FxList("--remove-fx");
 var removeNodeFx = FxList("--remove-node-fx");
+// --bank a.bnk,b.bnk: more banks after Init.bnk and SFX.bnk (the baked mods', absolute paths)
+int bankAt = Array.IndexOf(args, "--bank");
+string[] extraBanks = bankAt >= 0 && bankAt + 1 < args.Length ? args[bankAt + 1].Split(',', StringSplitOptions.RemoveEmptyEntries) : [];
 int onlyAt = Array.IndexOf(args, "--only");
 if (onlyAt >= 0 && onlyAt + 1 < args.Length)
 {
@@ -65,6 +68,14 @@ const int Rate = 48000, Frame = 1024;
 void Start()
 {
     Ak.Init(plugins, banks);
+    foreach (string bank in extraBanks)
+    {
+        // As Expand the Gungeon loads its bank (ExpandAssets.InitAudio); the memory stays allocated, Wwise keeps using it.
+        byte[] bytes = File.ReadAllBytes(bank);
+        IntPtr mem = System.Runtime.InteropServices.Marshal.AllocHGlobal(bytes.Length);
+        System.Runtime.InteropServices.Marshal.Copy(bytes, 0, mem, bytes.Length);
+        Ak.Check(Ak.CSharp_LoadAndDecodeBankFromMemory(mem, (uint)bytes.Length, false, Path.GetFileNameWithoutExtension(bank), false, out _), "LoadBank " + bank);
+    }
     Ak.Check(Ak.CSharp_RegisterGameObjInternal(Listener), "register listener");
     Ak.Check(Ak.CSharp_AddDefaultListener(Listener), "add listener");
     Ak.CSharp_SetObjectPosition(Listener, 0, 0, 0, 0, 0, 1, 0, 1, 0);

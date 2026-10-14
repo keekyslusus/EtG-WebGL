@@ -73,7 +73,7 @@ internal sealed class AccessFixer
             case MethodReference r when ins.OpCode == OpCodes.Call || ins.OpCode == OpCodes.Callvirt || ins.OpCode == OpCodes.Newobj:
             {
                 var def = SafeResolve(r);
-                if (def == null || def.Module == module || Accessible(def, def.DeclaringType, caller)) return false;
+                if (def == null || Accessible(def, def.DeclaringType, caller)) return false;
                 if (r.DeclaringType is GenericInstanceType || def.DeclaringType.HasGenericParameters)
                 {
                     throw new NotSupportedException("member of a generic type");
@@ -96,13 +96,13 @@ internal sealed class AccessFixer
             case MethodReference r when ins.OpCode == OpCodes.Ldftn || ins.OpCode == OpCodes.Ldvirtftn:
             {
                 var def = SafeResolve(r);
-                if (def == null || def.Module == module || Accessible(def, def.DeclaringType, caller)) return false;
+                if (def == null || Accessible(def, def.DeclaringType, caller)) return false;
                 throw new NotSupportedException("delegate to an inaccessible method");
             }
             case FieldReference f:
             {
                 var def = SafeResolve(f);
-                if (def == null || def.Module == module || Accessible(def, def.DeclaringType, caller)) return false;
+                if (def == null || Accessible(def, def.DeclaringType, caller)) return false;
                 if (f.DeclaringType is GenericInstanceType || def.DeclaringType.HasGenericParameters)
                 {
                     throw new NotSupportedException("field of a generic type");
@@ -131,27 +131,40 @@ internal sealed class AccessFixer
         try { return f.Resolve(); } catch (AssemblyResolutionException) { return null; }
     }
 
-    // ECMA-335 accessibility from another assembly: public, protected from a subclass, or
-    // internal/protected internal when the owner grants InternalsVisibleTo - for the member and every
-    // enclosing type.
+    // ECMA-335 accessibility, for the member and every enclosing type: public; internal / protected internal within
+    // the assembly or with InternalsVisibleTo; private (and any nested type) from inside the declaring (enclosing)
+    // type, nested types included; protected from a subclass. The same assembly counts too: baked code (Harmony
+    // bodies moved into the game, hook trampolines) reaches the private members of other types there as well.
     private static bool Accessible(IMemberDefinition member, TypeDefinition declaring, MethodDefinition caller)
     {
-        bool internalsVisible = InternalsVisibleTo(declaring.Module, caller.Module);
+        bool internals = declaring.Module == caller.Module || InternalsVisibleTo(declaring.Module, caller.Module);
+        var callerType = caller.DeclaringType;
+        bool Within(TypeDefinition outer)
+        {
+            for (var c = callerType; c != null; c = c.DeclaringType)
+            {
+                if (c == outer) return true;
+            }
+            return false;
+        }
         for (var t = declaring; t != null; t = t.DeclaringType)
         {
-            bool typeOk = t.IsPublic || t.IsNestedPublic
-                || (internalsVisible && (t.IsNotPublic || t.IsNestedAssembly || t.IsNestedFamilyOrAssembly))
-                || ((t.IsNestedFamily || t.IsNestedFamilyOrAssembly) && Derives(caller.DeclaringType, t.DeclaringType));
+            bool typeOk = !t.IsNested
+                ? t.IsPublic || internals
+                : t.IsNestedPublic
+                    || (internals && (t.IsNestedAssembly || t.IsNestedFamilyOrAssembly))
+                    || Within(t.DeclaringType)
+                    || ((t.IsNestedFamily || t.IsNestedFamilyOrAssembly || (internals && t.IsNestedFamilyAndAssembly)) && Derives(callerType, t.DeclaringType));
             if (!typeOk) return false;
         }
         switch (member)
         {
             case MethodDefinition m:
-                return m.IsPublic || (internalsVisible && (m.IsAssembly || m.IsFamilyOrAssembly))
-                    || ((m.IsFamily || m.IsFamilyOrAssembly) && Derives(caller.DeclaringType, declaring));
+                return m.IsPublic || (internals && (m.IsAssembly || m.IsFamilyOrAssembly)) || Within(declaring)
+                    || ((m.IsFamily || m.IsFamilyOrAssembly || (internals && m.IsFamilyAndAssembly)) && Derives(callerType, declaring));
             case FieldDefinition f:
-                return f.IsPublic || (internalsVisible && (f.IsAssembly || f.IsFamilyOrAssembly))
-                    || ((f.IsFamily || f.IsFamilyOrAssembly) && Derives(caller.DeclaringType, declaring));
+                return f.IsPublic || (internals && (f.IsAssembly || f.IsFamilyOrAssembly)) || Within(declaring)
+                    || ((f.IsFamily || f.IsFamilyOrAssembly || (internals && f.IsFamilyAndAssembly)) && Derives(callerType, declaring));
         }
         return true;
     }
@@ -230,7 +243,7 @@ internal sealed class AccessFixer
         }
         il.Emit(newobj ? OpCodes.Newobj : callvirt && target.IsVirtual ? OpCodes.Callvirt : OpCodes.Call, call);
         il.Emit(OpCodes.Ret);
-        Holder(module).Methods.Add(t);
+        t = Place(t, target.DeclaringType, ReachableFromAssembly(target));
         _trampolines[key] = t;
         Console.WriteLine($"   trampoline {module.Assembly.Name.Name} {t.Name} -> {target.FullName}");
         return t;
@@ -254,10 +267,90 @@ internal sealed class AccessFixer
         foreach (var p in t.Parameters) il.Emit(OpCodes.Ldarg, p);
         il.Emit(field.IsStatic ? (store ? OpCodes.Stsfld : OpCodes.Ldsfld) : (store ? OpCodes.Stfld : OpCodes.Ldfld), field);
         il.Emit(OpCodes.Ret);
-        Holder(module).Methods.Add(t);
+        t = Place(t, field.DeclaringType, ReachableFromAssembly(field));
         _trampolines[key] = t;
         Console.WriteLine($"   trampoline {module.Assembly.Name.Name} {t.Name} -> {field.FullName}");
         return t;
+    }
+
+    // Mono allows a private (or protected, private protected) member only to its own type and the types nested in it -
+    // not to ModBaker.Access next to it. Such a trampoline goes into a public class `ModBakerAccess` nested in the
+    // member's type, and forwarders lead out of every enclosing type that code elsewhere can't see (a private nested
+    // type, e.g. a lambda's closure class) up to ModBaker.Access. Returns the method callers use.
+    private MethodDefinition Place(MethodDefinition trampoline, TypeDefinition declaring, bool reachable)
+    {
+        if (reachable)
+        {
+            Holder(declaring.Module).Methods.Add(trampoline);
+            return trampoline;
+        }
+        if (declaring.HasGenericParameters)
+        {
+            throw new NotSupportedException("private member of a generic type");
+        }
+        var current = trampoline;
+        NestedHolder(declaring).Methods.Add(current);
+        for (var t = declaring; t.DeclaringType != null; t = t.DeclaringType)
+        {
+            if (t.IsNestedPublic || t.IsNestedAssembly || t.IsNestedFamilyOrAssembly) continue;
+            if (t.DeclaringType.HasGenericParameters) throw new NotSupportedException("private type nested in a generic type");
+            current = Forwarder(current, NestedHolder(t.DeclaringType));
+        }
+        return Forwarder(current, Holder(declaring.Module));
+    }
+
+    // The member and every enclosing type can be reached from a top-level class of the same assembly.
+    private static bool ReachableFromAssembly(IMemberDefinition member)
+    {
+        bool ok = member switch
+        {
+            MethodDefinition m => m.IsPublic || m.IsAssembly || m.IsFamilyOrAssembly,
+            FieldDefinition f => f.IsPublic || f.IsAssembly || f.IsFamilyOrAssembly,
+            _ => true,
+        };
+        for (var t = member.DeclaringType; ok && t.IsNested; t = t.DeclaringType)
+        {
+            ok = t.IsNestedPublic || t.IsNestedAssembly || t.IsNestedFamilyOrAssembly;
+        }
+        return ok;
+    }
+
+    private TypeDefinition NestedHolder(TypeDefinition type)
+    {
+        var holder = type.NestedTypes.FirstOrDefault(n => n.Name == "ModBakerAccess");
+        if (holder == null)
+        {
+            holder = new TypeDefinition("", "ModBakerAccess", TypeAttributes.NestedPublic | TypeAttributes.Abstract | TypeAttributes.Sealed | TypeAttributes.BeforeFieldInit, type.Module.TypeSystem.Object);
+            type.NestedTypes.Add(holder);
+            _world.MarkModified(type.Module);
+        }
+        return holder;
+    }
+
+    // public static R Name(args) => inner(args), with inner's generic parameters.
+    private static MethodDefinition Forwarder(MethodDefinition inner, TypeDefinition holder)
+    {
+        var f = new MethodDefinition(inner.Name, MethodAttributes.Public | MethodAttributes.Static | MethodAttributes.HideBySig, holder.Module.TypeSystem.Void);
+        foreach (var gp in inner.GenericParameters) f.GenericParameters.Add(new GenericParameter(gp.Name, f) { Attributes = gp.Attributes });
+        for (int i = 0; i < inner.GenericParameters.Count; i++)
+        {
+            foreach (var c in inner.GenericParameters[i].Constraints) f.GenericParameters[i].Constraints.Add(MapGp(c, f));
+        }
+        f.ReturnType = MapGp(inner.ReturnType, f);
+        foreach (var p in inner.Parameters) f.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, MapGp(p.ParameterType, f)));
+        var il = f.Body.GetILProcessor();
+        foreach (var p in f.Parameters) il.Emit(OpCodes.Ldarg, p);
+        MethodReference call = inner;
+        if (inner.HasGenericParameters)
+        {
+            var gim = new GenericInstanceMethod(inner);
+            foreach (var gp in f.GenericParameters) gim.GenericArguments.Add(gp);
+            call = gim;
+        }
+        il.Emit(OpCodes.Call, call);
+        il.Emit(OpCodes.Ret);
+        holder.Methods.Add(f);
+        return f;
     }
 
     // A method's own generic parameters (!!n) in its signature -> the trampoline's.

@@ -14,3 +14,4 @@ port/**/bin/
 port/**/obj/
 /port/audio/__pycache__
 /port/__pycache__/
+/port/mods/__pycache__/

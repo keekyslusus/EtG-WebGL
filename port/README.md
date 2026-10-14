@@ -206,6 +206,17 @@ is a small Wwise-like engine on Web Audio that interprets the banks' object grap
   position rendered by WwiseRef and by `EtgAudio.render()` in headless Chrome; level, peak, onset, end, spectral
   centroid and balance compared (`port/build/audiodiff/report.html`, worst cases with audio of both).
 
+- Baked mods' banks: `build_audio.py --mods <dir>` (from `apply.sh --mods`) writes `webaudio/mods/<package>/` and
+  `mods.json`; the engine merges them into the game's data at start. `audiodiff.py --mods` tests them (Mods,
+  Expand the Gungeon).
+- Found with Expand the Gungeon's bank (`audiodiff.py --mods`, then checked on the whole game): dB-scaled curves
+  above 0 mean `1 / (1 - y)`, not `y + 1` (y = 1 is an infinite boost, which Wwise renders as silence); 3D
+  spatialization "None" (`bits3d & 3 == 0`): attenuated by distance, not panned; a mono voice that isn't panned in
+  3D is mixed at the centre of the panner, -3 dB a side, not copied to both channels at full level. On the whole
+  game: 1319 -> 1293 of 2063 cases flagged, event level flags 787 -> 744, event level p10..p90 -2.1..+3.5 ->
+  -2.2..+2.6 dB (median -0.2 -> -0.7); the game's 2D mono events alone: mean |level difference| 2.31 -> 1.62 dB
+  (median +1.7 -> -1.4: some other ~1.5 dB is still unaccounted for there).
+
 ### Effects
 
 - Parametric EQ and Delay: built from their parameters (biquads, a feedback delay line).
@@ -271,6 +282,7 @@ mod pack is baked into the build: `./apply.sh --mods` installs the packages of `
 `./apply.sh` takes them out again), then the usual player build.
 
 - `mods/fetch_mods.sh` copies the packages from the r2modman cache into `etg/mods/` (third-party binaries, not in git).
+  A package without a `plugins/` folder (Expand the Gungeon) gets its files moved into one, as r2modman installs them.
 - `ModBaker/bake.sh` (`port/ModBaker`, .NET Framework 4.7.2: it runs the mods' own net35 HarmonyX/MonoMod) loads the
   game and the mods by reflection and lets HarmonyX build every patched body itself: patches are registered like
   `PatchAll` does (one patch method at a time, so one bad target doesn't take its class down), the patcher backend is
@@ -283,17 +295,31 @@ mod pack is baked into the build: `./apply.sh --mods` installs the packages of `
     (`ModBaker.Redirects`), and every call in the game and mod assemblies is redirected to them. MtG API's MonoMod
     patch that routes `Instantiate<T>(T)` through `Instantiate(Object)` is reproduced the same way.
   - `[HarmonyReversePatch]` stand-ins get a copy of the original body.
-  - MonoMod `new Hook(from, to)`: from/to are recovered by evaluating the reflection code in front of the constructor;
-    the original body moves to a static `Name_orig_bakedN(self, ...)` and the target calls the hook with a delegate
-    to it.
+  - MonoMod `new Hook(from, to[, target])`: from/to are recovered by evaluating the reflection code in front of the
+    constructor (a small stack machine: `typeof(X).GetMethod(...)`, `AccessTools.Method`, locals, any third
+    argument); the original body moves to a static `Name_orig_bakedN(self, ...)`. Mods switch hooks on and off while
+    the game runs (Expand the Gungeon: console commands, items picked up and dropped, the punch-out arcade), so each
+    (from, to) pair gets a slot, `ModBaker.BakedHooks::slotN` (a `MonoMod.RuntimeDetour.BakedHook`: an applied count
+    and the Hook's target object) in the hook's assembly, and the target's body becomes "slot applied ? hook([target
+    as T,] [orig delegate,] self, args) : original". Every `new Hook(...)` is rewritten to the facade's constructor
+    that takes the slot; the facade's ctor / `Apply` turn it on, `Undo` / `Dispose` off - as the detour would be. A
+    hook created in an `Init` or a static constructor is on from then on, as before; before that the original runs
+    (as in the game). Hooks without the orig parameter replace the method outright (MonoMod allows that). An
+    instance hook method is called on the Hook's target object if it is of the hook's class; mods pass `typeof(X)`
+    there when `this` isn't used (Mono then calls the hook on the Type object), and the hook gets a stand-in instance
+    of its class instead (`BakedHook.TargetAs`, `FormatterServices.GetUninitializedObject`) - not null: IL2CPP
+    null-checks `this` even on a non-virtual call (the first build threw in every `PhysicsEngine.LateUpdate`). Hooks on engine methods (Expand the Gungeon's
+    FakePrefab hooks on `Object.Instantiate`) go on the redirect wrapper every call is sent to (`Redirector`; the
+    Harmony one if the method is patched too). Two pairs on one method chain in bake order (MonoMod: apply order).
+    One Hook object per pair is assumed: a pair applied twice runs its hook once.
   - Mono finds `Load(string,string)` where .NET Framework reports `Load<T>(string,string)` as ambiguous: a finalizer
     on `AccessTools.DeclaredMethod` (`MonoLikeLookup`) answers like Mono.
   - What only ran while patching is stripped from the mods (IL manipulators, transpilers, their lambdas and closure
     classes - everything touching Mono.Cecil / MonoMod.Utils / CodeInstruction), as are the `[Harmony*]` attributes;
     mod references are set to the identities that ship (facades, MtG API's unsigned Newtonsoft.Json 11).
-- `port/ModFacades`: `BepInEx` (BaseUnityPlugin, config files, logging to the Unity log, Paths, Chainloader),
-  `0Harmony` (PatchAll does nothing, AccessTools, CollectionExtensions) and `MonoMod.RuntimeDetour` (Hook does
-  nothing) - the API the mods still call at runtime.
+- `port/ModFacades`: `BepInEx` (BaseUnityPlugin, config files, logging to the Unity log, Paths, Chainloader,
+  `UnityInput`), `0Harmony` (PatchAll does nothing, AccessTools, CollectionExtensions) and `MonoMod.RuntimeDetour`
+  (Hook switches its baked slot, `BakedHook`) - the API the mods still call at runtime.
 - The patcher treats the mods like the game (threads, files, AssetBundles...). Mod-specific: `BindingList<T>` (MtG
   API's SGUI; not in the WebGL profile) is implemented in `WebShim/SystemStubs.cs`; Alexandria's PrefabAPI writes
   AssetBundles at runtime for StandaloneWindows64 and gets WebGL instead (`LiteralShims`).
@@ -318,6 +344,10 @@ Found on the first runs in the browser:
   nullability, Newtonsoft.Json) with CS0009, which stops every script compile: the patcher removes them. It also stubs
   Newtonsoft's `JsonTypeReflector.DynamicCodeGeneration` to false (no Reflection.Emit on IL2CPP).
 - `LogSwallowedExceptions` (patcher): `catch { }` blocks of chosen mod methods log what they discard.
+- Silver Jacket writes `<game root>/SilverJacketData/ItemStats.json` on every pickup of its items, but only its
+  `slvjckt read_stats` command creates the folder: the pickup threw out of `PlayerController.HandlePlayerInput` and the
+  player stopped responding (on a fresh Steam install too, as far as the code goes). The Chainloader facade creates
+  the folder at start.
 
 - Engine generic overloads that call a patched method (`Instantiate<T>(T, Vector3, Quaternion)` is
   `(T)Instantiate((Object)original, ...)`) are patched along with it in the game; here they get copies in the mod
@@ -330,3 +360,76 @@ baked code calls private members of other assemblies: the game calls the mods' p
 copies call the game's internals, and the mods read the game's private fields directly (built against a publicized
 Assembly-CSharp). `AccessFixer` routes each such use through a public trampoline `ModBaker.Access.*` in the member's
 own assembly (the members keep their visibility, so reflection with NonPublic still finds them).
+
+### Expand the Gungeon (mods with their own AssetBundles, sound banks and shaders)
+
+ApacheThunder's Expand the Gungeon 3.0.8 (new floors, items, enemies; `modpack.txt`) brings three Windows AssetBundles
+(`expandsharedauto` 17 MB: rooms, serialized data, textures, prefabs; `expandshaders`: 8 shaders; `expandaudio` 53 MB:
+its Wwise bank as a TextAsset) and 57 MonoMod hooks. What it needed beyond the first mods:
+
+- **Bundles from source** (`mods/mod_bundles.py`, run by `apply.sh --mods`). WebGL can't load Windows bundles, and
+  decompiling the shaders is what we don't want; the mod's repository has the Unity projects the bundles are built
+  from (`ExpandAssets`, `ExpandShaders`). Clone it into `tools/src/ExpandTheGungeon` (the commit is in
+  `mod_bundles.py`: `git clone -b BepInEx https://github.com/ApacheThunder/ExpandTheGungeon tools/src/ExpandTheGungeon`,
+  `git checkout a7ff72a6`; needs `pip install UnityPy`). The repository has no `.meta` files, so no GUIDs, import
+  settings or bundle names; `mod_bundles.py` recovers them from the shipped bundle of the same version (UnityPy):
+  - every entry of the shipped bundle's container is copied from the sources to the same path in our project
+    (`Assets/ExpandRooms/...`: the mod loads many assets by full path) with `assetBundleName`, so EtG Web -> 3 builds
+    `expandsharedauto`/`expandshaders`/`expandaudio` for WebGL with the game's bundles. Sources and bundle agree (all
+    1522 entries); text assets are written with the bundle's bytes (git normalised line endings, 122 files had CRLF,
+    and the mod splits texts on `'\n'`);
+  - textures get the bundle's format (RGB24/RGBA32), point filtering, wrapping, no mips, readable, and
+    `alphaIsTransparency` where the bundle's transparent pixels differ from the PNG's;
+  - the 21 GUIDs the prefabs reference: each reference is looked up in the shipped bundle's copy of the prefab (same
+    hierarchy path, class, index) - a script becomes a reference into `Plugins/ExpandTheGungeon.dll` (fileID = first 4
+    bytes of MD4("s\0\0\0" + namespace + class), checked against the game's prefabs), an asset of the bundle gets that
+    GUID in its `.meta` (two GUIDs for one asset: the second is rewritten), a missing material stays missing (it is
+    in the shipped bundle too). The mod DLLs' `.meta` GUIDs are fixed (md5 of `etgmod:<file>`, `apply.sh`);
+  - `expandaudio`'s bank becomes an empty stand-in (sound comes from the audio pack, below): the bundle is tiny.
+  - In the build, `BootLoader` preloads every bundle the bundle manifest lists besides the game's (the mods'),
+    `BundleShim.LoadFromFile` of `.../BepInEx/plugins/<package>/<file>` returns the bundle named like the file, and
+    `build_pack.py` packs Windows bundle files as empty placeholders (the mod only checks they exist). Play Mode
+    simulates them from the project like the game's, except that a mod bundle's prefab comes as a runtime copy (one
+    per asset, under a hidden inactive root): AssetDatabase hands out the prefab asset itself, and the editor refuses
+    `Renderer.material` on it (PortableShip: "Not allowed to access Renderer.material on prefab object"), and the
+    mods' AddComponent & co. would change the project's assets.
+- **Shaders**: compiled by Unity from the mod's sources for GLES3; `abtest.sh --filter Expand` (D3D11 vs GLES): 4 of 8
+  identical, the rest only where `frac(sin(dot(...)) * 43758.5)` noise hashes (VHS, Cinematic) or texel-boundary
+  samples (GlitchScreen) differ, as for the game's own shaders; no flipped or broken effect.
+- **Video**: `ExpandScreenFXController` plays VideoClips (VHS noise, an old-film overlay); the WebGL VideoPlayer only
+  plays URLs. The patcher turns `VideoPlayer.clip = c` into `MediaShim.SetVideoClip`, which on WebGL plays
+  `StreamingAssets/mods/video/<clip name>.mp4` (`mod_bundles.py` copies the sources there; H.264/AAC). The clips
+  stay in the bundle (6 MB; the VideoPlayer components and the controller reference them, and the name comes from
+  them); their `.meta` needs `useLegacyImporter: 0`, otherwise 2017.4 imports them as MovieTextures, which WebGL
+  drops (only the audio track was left, as an AudioClip). The old-film
+  pass is Windows-only in the mod (`Application.platform == WindowsPlayer`); those reads see Windows
+  (`WindowsPlatformChecks`, as on Steam).
+- **Sound**: the bank (version 128 like the game's) is converted like the game's into `webaudio/mods/<package>/`
+  (`build_audio.py --mods`, listed in `webaudio/mods.json`; sounds over 5 s - the floors' music - are separate
+  files fetched when played, the rest one 0.5 MB pack). The engine merges it into the game's data before anything
+  plays; its sounds route into the game's Master Audio Bus. `LoadAndDecodeBankFromMemory` -> `WwiseShim`: loaded.
+  `audiodiff.py --mods` compares the mod's events (WwiseRef loads the bank from memory as the mod does), at the
+  game's default volume options (80). Found and fixed in the engine (Sound section): the dB curve scale above 0
+  (the mod's VOL_SFX curves end at +1 = muted at volume 100 - also in Steam), 3D spatialization "None", the -3 dB
+  centre of unpanned mono voices. Result: 20 of 116 cases flagged, level median +0.6 dB (p10..p90 +0.4..+1.5).
+- **Libraries**: Ionic.Zip (from Mod the Gungeon API's folder; the mod reads its bundles from a zip if it is installed
+  zipped): ThreadPool work items run at once (ThreadShim), self-extractor stubs and console-colour tracing stubbed;
+  `AssetBundle.LoadFromStream` -> `BundleShim` (Windows bundles from a zip can't load here). BepInEx facade:
+  `UnityInput.Current`.
+- `Patcher verify` also fails on a branch whose target isn't an instruction: code inserted in front of a call
+  without first switching to long branch forms (`SimplifyMacros`) silently overflowed a short branch, and il2cpp died
+  with a NullReferenceException in its control-flow graph after 20 minutes of building.
+- **The game's assets by their original names** (`bundle_names.py` -> `bundle_renames.tsv`, applied by `apply.sh`):
+  the mod loads game assets by name (`LoadAsset<Shader>("BraveLitTk2dCustomFalloffCutout")`, the room table
+  "basic special rooms (shrines, etc)"), and a bundle finds them by path or file name. AssetRipper had exported 38 of
+  them under other names: "," as "_", and 37 shaders of `shared_auto_001` that were also in `Resources/` as
+  `<name>_0.shader`. They are renamed back (the latter into `Assets/BundleNames/<bundle>/`, the original file name in
+  another folder - a full-path lookup still misses them). Only bundles change: EtG Web -> Rebuild Bundles Only.
+- **Memory**: the wasm heap is fixed at build time; 1536 MB ran out while the mod built its room prefabs at start, the
+  build now uses 2032 MB (2017.4's maximum; `TOTAL_MEMORY` in `webbuild.json` can't raise it, the module declares its
+  maximum).
+- **GetCallingAssembly** (all mods, `Patcher/CallerAssembly.cs`): IL2CPP answers it from the stack, and on WebGL
+  only development builds have one (stack trace sentries); release builds get mscorlib, and Alexandria (92
+  methods: sprites from the calling mod's resources) and Expand the Gungeon found nothing. Every call to a method
+  that uses it now first names the calling type (`WebShim.CallerAssembly.Set(typeof(Caller).TypeHandle)`), the
+  method takes it on entry; reached through a delegate or reflection it falls back to the real call.

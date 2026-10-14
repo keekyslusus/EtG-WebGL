@@ -8,7 +8,7 @@ namespace WebShim
     /// <summary>
     /// WebGL (Unity 2017.4) has no threads. The patcher rewrites
     /// new Thread(...) / Start / Join / Sleep / IsAlive / Abort in game code
-    /// to these methods, which run the thread body synchronously on Start.
+    /// to these methods, which run the thread body synchronously on Start (ThreadPool work items: at once).
     /// </summary>
     public static class ThreadShim
     {
@@ -80,5 +80,19 @@ namespace WebShim
         public static bool IsAlive(Thread t) { return false; }
 
         public static void Abort(Thread t) { s_pending.Remove(t); }
+
+        /// <summary>ThreadPool.QueueUserWorkItem (Ionic.Zip's parallel deflate, shipped with Expand the Gungeon): runs the item now.</summary>
+        public static bool QueueUserWorkItem(WaitCallback callback, object state)
+        {
+            try
+            {
+                callback(state);
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
+            return true;
+        }
     }
 }

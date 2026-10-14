@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
@@ -17,6 +18,7 @@ namespace WebShim
         public uint CacheVersion = 1;
 
         private int m_done;
+        private int m_total = BundleShim.AllBundles.Length;
         private float m_currentProgress;
         private string m_current = "";
         private string m_error;
@@ -73,8 +75,21 @@ namespace WebShim
                 }
             }
 
-            string[] names = BundleShim.AllBundles;
-            for (int i = 0; i < names.Length; i++)
+            // The game's bundles, then any other the manifest lists: the baked mods' own (built from the
+            // project like the game's, see port/mods/README.md), which mods load from their plugin folder.
+            List<string> names = new List<string>(BundleShim.AllBundles);
+            if (manifest != null)
+            {
+                foreach (string extra in manifest.GetAllAssetBundles())
+                {
+                    if (!names.Contains(extra))
+                    {
+                        names.Add(extra);
+                    }
+                }
+            }
+            m_total = names.Count;
+            for (int i = 0; i < names.Count; i++)
             {
                 string name = names[i];
                 m_current = name;
@@ -133,7 +148,7 @@ namespace WebShim
 
         private void OnGUI()
         {
-            int total = BundleShim.AllBundles.Length;
+            int total = m_total;
             float progress = (m_done + m_currentProgress) / total;
             float w = Screen.width * 0.6f;
             float x = (Screen.width - w) / 2f;

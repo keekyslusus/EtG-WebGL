@@ -138,6 +138,14 @@ namespace WebShim
 
         public static uint CSharp_GetIDFromString__SWIG_0(string s) => Hash(s);
 
+        // Mods' banks (Expand the Gungeon: a TextAsset in its bundle) are converted at build time like the game's and
+        // loaded by the engine with them (port/audio/build_audio.py --mods): the bank is "loaded" already.
+        public static int CSharp_LoadAndDecodeBankFromMemory(IntPtr data, uint size, bool decodeBank, string name, bool saveDecoded, out uint bankId)
+        {
+            bankId = Hash(name);
+            return AK_Success;
+        }
+
         public static uint CSharp_PostEvent__SWIG_0(uint e, ulong o, uint flags, IntPtr cb, IntPtr cookie, uint nExt, IntPtr ext, uint playingId) => Post(e, o);
         public static uint CSharp_PostEvent__SWIG_1(uint e, ulong o, uint flags, IntPtr cb, IntPtr cookie, uint nExt, IntPtr ext) => Post(e, o);
         public static uint CSharp_PostEvent__SWIG_2(uint e, ulong o, uint flags, IntPtr cb, IntPtr cookie, uint nExt) => Post(e, o);

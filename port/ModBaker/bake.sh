@@ -17,5 +17,6 @@ while read -r pkg ver; do
         dirs+=("$MODS/$pkg/plugins")
     fi
 done < <(grep -vE '^\s*(#|$)' "$PORT/mods/modpack.txt")
-rm -rf "$PORT/build/modbaked"
+mkdir -p "$PORT/build/modbaked"
+rm -f "$PORT/build/modbaked/"*.dll   # contents only: the folder itself may be held open on Windows
 "$PORT/build/ModBaker/ModBaker.exe" bake "$ROOT/Enter the Gungeon/EtG_Data/Managed" "$PORT/build/modbaked" "$PORT/build/ModFacades" "${dirs[@]}"

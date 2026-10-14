@@ -104,6 +104,21 @@ namespace WebShim
             return bundle;
         }
 
+        /// <summary>
+        /// Drop-in replacement for AssetBundle.LoadFromStream(Stream). Mods use it for bundles inside a zip
+        /// (Expand the Gungeon when installed zipped); those are built for Windows, and the web build's own
+        /// copies come through LoadFromFile.
+        /// </summary>
+        public static AssetBundle LoadFromStream(System.IO.Stream stream)
+        {
+            if (Application.platform == RuntimePlatform.WebGLPlayer || Simulation && Application.isEditor)
+            {
+                Debug.LogError("[WebShim] AssetBundle.LoadFromStream: only bundles built into the web build can be loaded");
+                return null;
+            }
+            return AssetBundle.LoadFromStream(stream);
+        }
+
         // ---- Instance AssetBundle API: the patcher turns bundle.X(args) into BundleShim.X(bundle, args) ----
 
         public static T LoadAsset<T>(AssetBundle bundle, string name) where T : UnityEngine.Object
@@ -250,12 +265,48 @@ namespace WebShim
                     UnityEngine.Object asset = EditorAssets.LoadAssetAtPath(path, type);
                     if (asset != null)
                     {
-                        return asset;
+                        return Array.IndexOf(AllBundles, bundleName) < 0 ? RuntimeCopy(path, asset) : asset;
                     }
                 }
             }
             Debug.LogWarning("[WebShim] Simulated bundle " + bundleName + " has no " + type.Name + " named " + assetName);
             return null;
+        }
+
+        // A mod's bundle prefab, simulated: AssetDatabase hands out the prefab asset itself, which the editor won't let
+        // code use like a loaded one (Renderer.material: "Not allowed to access Renderer.material on prefab object") and
+        // which mods change (AddComponent...) - changes to the project's assets. A real bundle's prefab is a runtime
+        // object: one copy per asset, under a hidden inactive root (no Awake, as for a bundle's prefab). Only for mod
+        // bundles: other game assets reference the game's bundle prefabs, which must stay the same objects.
+        private static GameObject s_simRoot;
+        private static readonly Dictionary<string, GameObject> s_simCopies = new Dictionary<string, GameObject>();
+
+        private static UnityEngine.Object RuntimeCopy(string path, UnityEngine.Object asset)
+        {
+            GameObject prefab = asset as GameObject;
+            Component component = asset as Component;
+            if (component != null)
+            {
+                prefab = component.gameObject;
+            }
+            if (prefab == null)
+            {
+                return asset;
+            }
+            GameObject copy;
+            if (!s_simCopies.TryGetValue(path, out copy) || copy == null)
+            {
+                if (s_simRoot == null)
+                {
+                    s_simRoot = new GameObject("[WebShim] simulated mod bundle prefabs") { hideFlags = HideFlags.HideAndDontSave };
+                    s_simRoot.SetActive(false);
+                    UnityEngine.Object.DontDestroyOnLoad(s_simRoot);
+                }
+                copy = UnityEngine.Object.Instantiate(prefab, s_simRoot.transform);
+                copy.name = prefab.name;
+                s_simCopies[path] = copy;
+            }
+            return component != null ? (UnityEngine.Object)copy.GetComponent(component.GetType()) : copy;
         }
 
         private static void AddToIndex(Dictionary<string, List<string>> index, string key, string path)
@@ -324,10 +375,16 @@ namespace WebShim
             }
         }
 
-        /// <summary>".../StreamingAssets/Assets/dungeons/base_castle" -> "dungeons/base_castle".</summary>
+        /// <summary>".../StreamingAssets/Assets/dungeons/base_castle" -> "dungeons/base_castle"; a mod's own
+        /// ".../BepInEx/plugins/&lt;package&gt;/expandsharedauto" -> "expandsharedauto" (the web build has it
+        /// among its own bundles, mods/README; the file there is an empty placeholder).</summary>
         private static string ToBundleName(string path)
         {
             string p = Normalize(path);
+            if (p.Contains("/bepinex/plugins/"))
+            {
+                return p.Substring(p.LastIndexOf('/') + 1);
+            }
             const string marker = "/assets/";
             int i = p.LastIndexOf(marker);
             // LastIndexOf would hit a "/assets/" inside the bundle name if one existed;

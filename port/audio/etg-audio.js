@@ -125,7 +125,9 @@
     return h;
   }
 
-  // Piecewise-linear curve [[x, y, interp]...]; dB-scaled curves store linear gain - 1.
+  // Piecewise-linear curve [[x, y, interp]...]. dB-scaled curves store a symmetric gain scale: y <= 0 is linear
+  // gain - 1, y > 0 is 1 / (1 - y) - so y = 1 is an infinite boost, which Wwise renders as silence (measured with
+  // WwiseRef: Expand the Gungeon's VOL_SFX curves end at +1, its sounds are mute at VOL_SFX 100).
   function evalCurve(points, x, scaling) {
     let y;
     if (x <= points[0][0]) {
@@ -142,7 +144,9 @@
         }
       }
     }
-    return scaling === 2 ? 20 * Math.log10(Math.max(y + 1, 1e-5)) : y;
+    if (scaling !== 2) return y;
+    if (y > 0) return y >= 1 ? -200 : -20 * Math.log10(1 - y);
+    return 20 * Math.log10(Math.max(y + 1, 1e-5));
   }
 
   // AkCurveInterpolation: 0 Log3, 1 Sine, 2 Log1, 3 InvSCurve, 4 Linear, 5 SCurve, 6 Exp1, 7 SineRecip, 8 Exp3, 9 Constant
@@ -676,6 +680,40 @@
     }
   }
 
+  // The baked mods' banks (build_audio.py --mods): mods.json lists their directories, each with an audio.json of the
+  // same format. Their ids don't collide with the game's; their sounds route into the game's busses. Merged into the
+  // game's data before anything plays (a modded build only; elsewhere mods.json doesn't exist).
+  async function loadMods(json) {
+    let list = [];
+    try {
+      const r = await fetch(base + 'mods.json' + (version ? '?v=' + version : ''));
+      if (r.ok) list = await r.json();
+    } catch (e) {
+      // no mods
+    }
+    for (const dir of list) {
+      try {
+        const mod = JSON.parse(new TextDecoder().decode(await fetchBuffer(dir + 'audio.json')));
+        const firstPack = json.packs.length;
+        json.packs.push(...mod.packs.map((p) => dir + p));
+        for (const id of Object.keys(mod.media)) {
+          const m = mod.media[id];
+          if (m.pack) m.pack = [m.pack[0] + firstPack, m.pack[1], m.pack[2]];
+          if (m.file) m.file = dir + m.file;
+          json.media[id] = m;
+        }
+        Object.assign(json.events, mod.events);
+        Object.assign(json.nodes, mod.nodes);
+        json.effects = Object.assign(json.effects || {}, mod.effects);
+        json.names = Object.assign(json.names || {}, mod.names);
+        console.log(LOG, 'mod audio:', dir, Object.keys(mod.events).length, 'events');
+      } catch (e) {
+        console.error(LOG, 'cannot load mod audio', dir, e);
+      }
+    }
+    return json;
+  }
+
   function loadPacks() {
     packs = data.packs.map((name) => fetchBuffer(name));
     Promise.all(packs).then(predecode, (e) => console.error(LOG, 'loading sound packs failed', e));
@@ -892,6 +930,9 @@
     // Stereo position like Wwise's 3D panning: the azimuth on the horizontal (x/z) plane gives the
     // direction, the attenuation's spread curve (0-100 %) widens the source towards the centre.
     pan() {
+      // 3D spatialization "None" (Expand the Gungeon's sounds): attenuated by distance, but Wwise keeps them in the
+      // centre of its 3D panner - equal power, 3 dB below a 2D sound's mono-to-stereo (measured with WwiseRef).
+      if (!this.is3d || this.pos.pan === false) return 0;
       const d = this.relative();
       if (!d || (d[0] === 0 && d[2] === 0)) return 0;
       const spread = this.attenuationCurve(5);
@@ -970,11 +1011,21 @@
       this.gain = ctx.createGain();
       out.connect(this.gain);
       out = this.gain;
-      if (this.is3d) {
+      if (this.is3d || buffer.numberOfChannels === 1) {
+        // Wwise mixes a mono voice that isn't panned in 3D (2D, or 3D spatialization "None") into the stereo bus at
+        // the centre of its panner: equal power, -3 dB a side (StereoPanner at 0) - not the full-level copy of a
+        // plain mono-to-stereo up-mix. Measured with WwiseRef on Expand the Gungeon's sounds (port/README.md, Sound).
         this.panner = ctx.createStereoPanner();
         this.panner.pan.value = this.pan();
         out.connect(this.panner);
         out = this.panner;
+        if (this.is3d && this.pos.pan === false && buffer.numberOfChannels > 1) {
+          // a stereo voice in 3D spatialization "None" comes out 3 dB down as well (a StereoPanner at 0 passes it as is)
+          this.centre = ctx.createGain();
+          this.centre.gain.value = Math.SQRT1_2;
+          out.connect(this.centre);
+          out = this.centre;
+        }
       }
       const dests = [busInput(this.bus)];
       let destKey = String(this.bus);
@@ -1144,7 +1195,7 @@
       }
       this.stopExtras();
       // an echo keeps ringing after the sound ends, as in Wwise
-      const out = [this.gain, this.panner, this.direct];
+      const out = [this.gain, this.panner, this.centre, this.direct];
       const cut = () => out.forEach((n) => n && n.disconnect());
       if (this.fxTail > 0 && !this.fadingOut) later(cut, this.fxTail * 1000);
       else cut();
@@ -2318,6 +2369,7 @@
       }
       fetchBuffer('audio.json')
         .then((b) => JSON.parse(new TextDecoder().decode(b)))
+        .then((json) => loadMods(json))
         .then((json) => {
           data = json;
           nodes = json.nodes;

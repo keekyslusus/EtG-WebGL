@@ -71,10 +71,9 @@ internal sealed class Baker
         BakeHarmonyPatches(transplant);
         Redirector.AddGenericForwarders(_world, transplant);
         BakeReversePatches(transplant);
-        foreach (var mod in mods)
-        {
-            new HookBaker(_world, _problems).Bake(_world.Module(mod.Name));
-        }
+        _world.AddFacades(_facadeDir);
+        new HookBaker(_world, _problems).Bake(mods.Select(m => _world.Module(m.Name)));
+        Redirector.AddGenericForwarders(_world, transplant); // for engine methods only hooks wrap
         new Redirector(_world).Run();
         foreach (var mod in mods)
         {

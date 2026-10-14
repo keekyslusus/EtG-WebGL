@@ -48,7 +48,7 @@ interface WwNode {
   rtpc?: WwRtpc[];
   /** [state group, [[state, state object id]...]] */
   states?: [number, [number, number][]][];
-  pos?: { "3d": boolean; att: number };
+  pos?: { "3d": boolean; att: number; pan?: false };
   /** max instances; bits & 1: kill the newest */
   max?: { n: number; bits: number };
   /** HDR envelope tracking: [overrides the parent's, enabled] */
