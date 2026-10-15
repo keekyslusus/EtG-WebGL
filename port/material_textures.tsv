@@ -1,0 +1,3 @@
+# Texture slots AssetRipper exported empty (fix_materials.py, run by apply.sh): material, property, texture.
+# Loading screen throbber (dfGUI atlas of level0 / sharedassets0): drew as a white rectangle without it.
+Assets/Material/Loading Atlas.mat	_MainTex	Assets/Texture2D/Loading Atlas.png

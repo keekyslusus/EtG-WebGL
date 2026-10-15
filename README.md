@@ -21,7 +21,8 @@ port/
                 stubs for Unity types stripped from WebGL, loading screen
   site/         the web page around the player (index.html, save export/import; port/site/README.md)
   Patcher/      Mono.Cecil patcher for the game DLLs + `verify` (checks references against the WebGL libraries)
-  UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib
+  UnityAssets/  what gets copied into the Unity project: "EtG Web" menu, link.xml, jslib,
+                EtgModSmoke (automatic Play Mode test of the mods' content, port/README.md "Smoke test")
   ShaderDiff/   differential test of the decompiled shaders against the game's DX11 bytecode (see below)
   audio/        sound: Wwise banks -> Web Audio engine (etg-audio.js), its build and tests (port/README.md, Sound)
   WwiseRef/     renders test scripts with the game's own Wwise DLL offline (the reference for audio/)
@@ -29,6 +30,8 @@ port/
   decompile_shaders.sh / fix_shaders.py / shaderdiff.sh   shader decompilation, gles3 fix-ups, testing
   abtest.sh / abtest_report.py   the same frames in the editor on D3D11 and GLES, compared (port/README.md)
   variant-selection.sh / variant_selection.py   original variant inventory vs actual Unity branch selection
+  fix_materials.py / material_textures.tsv   texture slots AssetRipper exported empty (the loading screen's
+                throbber atlas drew as a white rectangle), restored by apply.sh
   setstack.py   increases the stack size of an exe (needed for asm2wasm)
   patch_webgl_dedupe.py   lets 2017.4's WebGL release builds through (skips an out-of-memory step)
   patch_webgl_noasm.py    no asm.js fallback link (2017.4 links the player twice; modded builds overflow 2 GB)

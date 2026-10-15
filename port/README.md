@@ -433,3 +433,72 @@ its Wwise bank as a TextAsset) and 57 MonoMod hooks. What it needed beyond the f
   methods: sprites from the calling mod's resources) and Expand the Gungeon found nothing. Every call to a method
   that uses it now first names the calling type (`WebShim.CallerAssembly.Set(typeof(Caller).TypeHandle)`), the
   method takes it on entry; reached through a delegate or reflection it falls back to the real call.
+
+### Smoke test (EtG Web -> Mod Smoke Test)
+
+An automatic Play Mode run over everything the mods add, so items don't have to be tried by hand. **EtG Web -> Mod
+Smoke Test -> Everything** (or one part: Items + Shop, Enemies, Floors + Flows) does Play From Boot and then, with
+nobody at the keyboard (don't touch the Game view while it runs):
+
+1. waits for the mods to load (Expand the Gungeon's `loadStatus` reaching `LoadFinished`) and the title screen,
+   then starts a run as the Pilot the way the title's quick start does (`FinalIntroSequenceManager`), with MtG
+   API's godmode on;
+2. every mod item - Mod the Gungeon API's `Game.Items` without the game's `gungeon:` IDs, plus
+   `ETGMod.Databases.Items.ModItems` (items added without an ID); the owner is the mod whose component sits on the
+   item, else the ID's namespace: given like the `give` command (`LootEngine.TryGivePrefabToPlayer`), guns fired
+   twice (`Attack` / `ContinueAttack` / `CeaseAttack`), reloaded and dropped, active items used
+   (`PlayerController.UseItem`, again if still active) and dropped, passive items dropped;
+3. four guns, actives and passives each bought from the first floor's shop: a `ShopItemController` set up as the
+   shops do (`Initialize`, room interactable) and `Interact` with enough money;
+4. every mod enemy - Expand the Gungeon's `ExpandEnemyDatabase.enemyPrefabDictionary` and enemy database entries
+   without a bundle path - spawned next to the player (`AIActor.Spawn`), killed after 3 s, leftovers erased;
+5. every mod floor (Expand the Gungeon's dungeon prefabs with the game's level definition, `LoadCustomLevel` as the
+   mod does) and flow (`ExpandDungeonFlow.KnownFlows` without the `_Copy` duplicates of the game's flows, through
+   `LoadCustomFlowForDebug` with the tileset the flow name belongs to, as `load_flow` would); after generation the
+   player warps into up to 12 rooms (not boss rooms), clearing what woke up.
+
+After each step everything the step left is removed (items, guns, debris, spawned objects; the player is healed,
+unpaused, time scale and input overrides cleared); if the run is lost (player gone, back in the Breach) the next
+step starts a new one. Every error, exception and assert in the log (`Application.logMessageReceived`) and every
+exception a step throws is counted for the step that runs, grouped by message + first frame, with the number of
+frames it appeared in (an error every frame shows as "every frame" / "Recurring"). A step has a timeout (items 30 s,
+floors 180 s) and an exception aborts only that step. Categories, by the first frames of the stack:
+
+- **port**: `MethodAccessException`, `FieldAccessException`, `TypeLoadException`, `Missing*Exception` & co.,
+  an error starting in the baker's code (`ModBaker.*` trampolines, hook slots; further down a stack they only mean
+  a patched method was on the way), or the top frame in WebShim or a facade (BepInEx, 0Harmony, MonoMod.RuntimeDetour);
+- **mod**: the top frames in a mod assembly (one that references BepInEx);
+- **playmode**: what only the editor forbids (`... is not allowed to be called from a MonoBehaviour constructor`,
+  `... on prefab object`, `Destroying assets is not permitted`, `UnloadAsset can only be used on assets` - BundleShim's
+  runtime copies of mod-bundle prefabs);
+- **other**: the game's own code or unclear; **smoke**: the test itself.
+
+The game's known noise (`DataPrivacy`, `NONE save flag`, `INSTANTIATING AMMONOMICON`, `dfInputManager.processMouseInput`
+NRE, `select_idle`, `_StencilVal`...) is only counted. The report - `port/build/modsmoke/report.md` (summary, error
+kinds by category with their steps and stacks, every step with notes) and `report.json` - is rewritten after each
+step, so a hang still shows how far it got; at the end Play Mode stops. `port/build/modsmoke/only.txt` (IDs or name
+parts, one per line) limits a run to those steps - for checking a fix.
+
+Unattended: `bash port/modsmoke.sh [phases]` (Unity closed) opens the project through OpenGL ES 3.0 like
+`open-gles30.ps1`, asks for the run through `port/build/modsmoke/request` (picked up after the editor's first idle script
+load, so also after the recompile it may do first - an `-executeMethod` would run the old build of the script) and
+returns when the editor has exited by itself. A hang of the game on the main thread (seen once: a run
+restart after a dead level load spun forever) or a crash of the editor can't be handled inside the test; the
+script's watchdog kills the editor when Editor.log stays silent for `HANG_MINUTES` (6), closes the bug reporter
+and starts the next attempt with `port/build/modsmoke/resume`: steps already done are taken over from
+`report.json` (the report is written at the start of each step too), the one that was running is reported as
+**hang** and the run goes on after it (`MAX_ATTEMPTS` 8; `RESUME=1` continues an interrupted run by hand). Before each action the test writes `[ModSmoke]   . <action>` to
+Editor.log: when Mono itself crashes (the report can't record that) the last such line says what was going on; the
+script closes the Unity Bug Reporter without sending (it attaches the whole project). With floors or flows a `diag`
+step lists the room tables of Expand the Gungeon with entries the generator can't use (no room, failing
+prerequisites). An error whose first frames are in a MonoBehaviour the editor refused to construct ("Called from
+MonoBehaviour 'X'") is counted as **playmode** too: the fields its constructor sets stay null in the editor only
+(Portable Ship, Iceberg Shavings; Ferryman Oar fails in `FerrymanOar.Add` because Alexandria's
+`ProjectileSlashingBehaviour` creates its `SlashData` in the constructor).
+
+Code: `UnityAssets/EtgModSmoke/` (runtime assembly; mods only through reflection, so it compiles and does nothing
+without them) and `Editor/EtgWebBuild/EtgModSmokeMenu.cs` (passes the phases through `Temp/modsmoke.pending`, because
+entering Play Mode reloads the script domain). Not covered: whether things look or sound right, mod NPCs / shrines /
+room objects outside the visited rooms, synergies, bosses fought properly (spawned bosses are killed outright), co-op,
+and what only WebGL / IL2CPP can show (null `this`, memory, missing stacks, Reflection.Emit) - for that the same runner
+can be started in the player later.

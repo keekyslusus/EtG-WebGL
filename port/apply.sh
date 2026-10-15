@@ -153,6 +153,9 @@ while IFS=$'\t' read -r from to; do
 done < "$PORT/bundle_renames.tsv"
 [ "$renamed" = 0 ] || echo "   bundle assets renamed to their original names: $renamed"
 
+# Texture slots AssetRipper exported empty (the loading screen's throbber atlas).
+python "$PORT/fix_materials.py" "$PORT/material_textures.tsv" "$PROJECT"
+
 # A few prefabs serialize assembly-qualified type names (PlayMaker variables).
 { grep -rlE 'Assembly-(CSharp|UnityScript)' "$PROJECT/Assets" --include=*.prefab --include=*.asset --include=*.unity 2>/dev/null || true; } |
 while read -r f; do

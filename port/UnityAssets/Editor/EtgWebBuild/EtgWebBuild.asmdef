@@ -1,6 +1,8 @@
 {
     "name": "EtgWebBuild.Editor",
-    "references": [],
+    "references": [
+        "EtgModSmoke"
+    ],
     "includePlatforms": [
         "Editor"
     ],

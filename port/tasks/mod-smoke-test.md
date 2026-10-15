@@ -91,3 +91,36 @@ Alexandria, Silver Jacket, Expand the Gungeon (`port/mods/modpack.txt`).
   падениях отдельных шагов.
 - Отчёт покрывает все предметы, оружие, врагов и этажи модов из `modpack.txt`.
 - Описано в `port/README.md`; коммиты в ветку `mods` — с согласия пользователя.
+
+## Состояние (ночь на 2026-10-15)
+
+Сделано: `EtG Web → Mod Smoke Test` (меню) и `bash port/modsmoke.sh [фазы]` (без участия человека: Unity с
+`-force-gles30`, сторож зависаний/вылетов, продолжение с места остановки). Описание — `port/README.md`, Mods → Smoke
+test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
+
+Итог полного прогона (`all`, 43 предмета, 12 покупок, 31 враг, 8 этажей, 32 flow): **ошибок порта — ноль.**
+Разобрано:
+- Portable Ship, Iceberg Shavings, Ferryman Oar — ограничения Play Mode (поля, заданные в конструкторах
+  MonoBehaviour / `ScriptableObject` в инициализаторах полей, в редакторе остаются `null`); в плеере работают.
+- Этаж West (`tt_west`, `F4c_West_Flow_01`) не грузится — баг мода, зависящий от сохранения: для SPECIAL-узла из
+  таблицы `basic_special_rooms_noBlackMarket` подходят только `Shrine_Cleanse_Room` (проклятие ≥ 1) и
+  `Shrine_CursedMirror_Room` (TIME_PLAYED > 3 ч и TIMES_REACHED_GUNGEON > 2); в свежем сохранении редактора ни одной →
+  NRE в `LoopBuilderComposite.GetExitPairsSimple` → бесконечная загрузка. С «наигранным» сохранением должно грузиться.
+- Белый прямоугольник на экране загрузки — потерянная AssetRipper'ом текстура `Loading Atlas.mat`
+  (`port/fix_materials.py` + `material_textures.tsv`, вызывается из `apply.sh`). Визуально не проверено.
+
+Открыто (не порт либо не выяснено):
+- Вылет Mono редактора (`mono_class_from_mono_type: implement me 0x00` при форматировании стека исключения в
+  `LateUpdate`) на Cascading Bullets после Bone Parade — плавающий; гипотеза: NRE в `CascadingBullets.OnDidDamage`
+  (`target.gameActor` у целей без актора, кость Bone Parade попала в бочку). IL2CPP этим Mono не пользуется.
+- Вылет Mono при `DEMO_STAGE_FLOW`: переполнение стека в `mono_traverse_objects` (liveness при `UnloadUnusedAssets`) —
+  проверить в WebGL.
+- `Custom_GlitchChest_Flow` с `Base_Gungeon` генерируется бесконечно (тайлсет подобран тестом наугад);
+  `Bossrush_01_Castle` и `MiniBossRush_01` стабильно не генерируются (6 неудачных итераций подряд в каждом прогоне;
+  загружались через `LoadCustomFlowForDebug`, не в режиме босс-раша). Грузятся 28 из 32 flow
+  (`report-flows-recheck.md`: `Fruit_Loops`, `Bossrush_04_Catacombs` после поднятия порога неудач генерации до 6).
+- NRE в `LoopFlowBuilder.AttachPregeneratedInjectionData` (плавающий, после рестарта забега; `TEST_West_Floor_03a_Flow`,
+  `Bossrush_01a_Sewer`) — вероятно, запись глобальной инъекции с пустым `injectionData`.
+- `IndexOutOfRange` в `tk2dBaseSprite.GetUntrimmedBounds` у «испорченных» врагов glitch-flow и «Material doesn't have
+  _Color» в `ExpandExtensions.Copy` — код мода, на Steam не сравнивалось.
+- Потом: тот же сценарий в WebGL (`?smoketest`), чтобы поймать IL2CPP-специфичное.
