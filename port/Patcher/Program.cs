@@ -125,16 +125,23 @@ internal static partial class Program
         ("Alexandria.PrefabAPI.AssetBundleBuilder", "BuildBundleFile", 19, "Write", "WebShim.BundleShim", "RuntimeBundleTargetPlatform"),
     };
 
-    // Mod bug fixes in dungeon flows built in code: after `node.overrideRoomTable = <Type>::<Field>` in the method, the
-    // node's roomCategory becomes BOSS. Expand the Gungeon's Custom_GlitchChest_Flow gives its glitch boss node the
-    // double beholster room table but leaves it a CONNECTOR; with Alexandria that table exists (alexandriaGlitchTable,
-    // boss rooms only), the generator looks for a connector in it forever and the glitch chest floor never loads -
-    // in the Steam game too. Custom_Glitch_Flow has the same node as BOSS, and Alexandria's UsesGlobalBossData patch
-    // then takes the room from its table (the glitch boss, not the floor's boss).
-    private static readonly (string Type, string Method, string TableType, string TableField)[] BossTableNodeFixes =
+    // Mod bug fixes in dungeon flows built in code (both also in the Steam game): the one node of the method that gets
+    // the room table <TableType>::<TableField> (`node.overrideRoomTable = table` or `node = GenerateDefaultNode(...,
+    // table, ...)`) then gets DungeonFlowNode::<NodeField> = <Value>.
+    // - Expand's Custom_GlitchChest_Flow gives its glitch boss node the double beholster room table but leaves it a
+    //   CONNECTOR; with Alexandria that table exists (alexandriaGlitchTable, boss rooms only), the generator looks for
+    //   a connector in it forever and the glitch chest floor never loads. BOSS like the same node of
+    //   Custom_Glitch_Flow; Alexandria's UsesGlobalBossData patch then takes the glitch boss from its table.
+    // - Expand's Old West floor has a MANDATORY special room from the game's shrine table; only two of its rooms are
+    //   SPECIAL and both have conditions (curse >= 1, or 3 h played and the Gungeon reached 3 times), so on a fresh save
+    //   the node gets no room and the load never ends. The game itself only injects that table where a room fits:
+    //   OPTIONAL, the floor is built without the shrine room then.
+    private static readonly (string Type, string Method, string TableType, string TableField, string NodeField, int Value)[] FlowNodeFixes =
     {
         ("ExpandTheGungeon.ExpandDungeonFlows.custom_glitchchest_flow", "m_Custom_GlitchChest_Flow",
-            "ExpandTheGungeon.ExpandPrefab.ExpandPrefabs", "doublebeholstertable"),
+            "ExpandTheGungeon.ExpandPrefab.ExpandPrefabs", "doublebeholstertable", "roomCategory", 3), // RoomCategory.BOSS
+        ("ExpandTheGungeon.ExpandDungeonFlows.f4c_west_flow_01", "m_F4c_West_Flow_01",
+            "ExpandTheGungeon.ExpandPrefab.ExpandPrefabs", "basic_special_rooms_noBlackMarket", "priority", 1), // NodePriority.OPTIONAL
     };
 
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
@@ -331,33 +338,49 @@ internal static partial class Program
                 report.Count($"literal {literal} -> {target.DeclaringType.Name}.{target.Name}: {typeName}.{methodName}");
             }
         }
-        foreach (var (typeName, methodName, tableType, tableField) in BossTableNodeFixes)
+        foreach (var (typeName, methodName, tableType, tableField, nodeField, value) in FlowNodeFixes)
         {
             foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
             {
                 method.Body.SimplifyMacros();
                 var il = method.Body.GetILProcessor();
-                // ldloc node; ldsfld <table>; stfld DungeonFlowNode::overrideRoomTable
-                var stores = method.Body.Instructions.Where(ins => ins.OpCode == OpCodes.Stfld
-                    && ins.Operand is FieldReference f && f.Name == "overrideRoomTable" && f.DeclaringType.Name == "DungeonFlowNode"
-                    && ins.Previous?.OpCode == OpCodes.Ldsfld && ins.Previous.Operand is FieldReference t
-                    && t.Name == tableField && t.DeclaringType.FullName == tableType
-                    && ins.Previous.Previous?.OpCode == OpCodes.Ldloc).ToList();
-                if (stores.Count != 1)
+                // (instruction after which the node is complete, its local)
+                var nodes = new List<(Instruction After, VariableDefinition Node)>();
+                foreach (var ins in method.Body.Instructions.Where(i => i.OpCode == OpCodes.Ldsfld
+                    && i.Operand is FieldReference t && t.Name == tableField && t.DeclaringType.FullName == tableType))
                 {
-                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one node.overrideRoomTable = {tableField}, found {stores.Count}");
+                    // ldloc node; ldsfld <table>; stfld DungeonFlowNode::overrideRoomTable
+                    if (ins.Next?.OpCode == OpCodes.Stfld && ins.Next.Operand is FieldReference f && f.Name == "overrideRoomTable"
+                        && ins.Previous?.OpCode == OpCodes.Ldloc)
+                    {
+                        nodes.Add((ins.Next, (VariableDefinition)ins.Previous.Operand));
+                        continue;
+                    }
+                    // ldsfld <table>; <constant arguments>; call GenerateDefaultNode; stloc node
+                    var next = ins.Next;
+                    while (next != null && next.OpCode.FlowControl == FlowControl.Next && next.OpCode.Code is Code.Ldc_I4 or Code.Ldc_R4 or Code.Ldnull)
+                    {
+                        next = next.Next;
+                    }
+                    if (next?.Operand is MethodReference call && call.Name == "GenerateDefaultNode" && next.Next?.OpCode == OpCodes.Stloc)
+                    {
+                        nodes.Add((next.Next, (VariableDefinition)next.Next.Operand));
+                    }
                 }
-                var store = stores[0];
-                // the node initializers of the same method set roomCategory: reuse that field reference
-                var category = method.Body.Instructions.First(ins => ins.OpCode == OpCodes.Stfld
-                    && ins.Operand is FieldReference f && f.Name == "roomCategory" && f.DeclaringType.Name == "DungeonFlowNode").Operand;
-                const int Boss = 3; // PrototypeDungeonRoom.RoomCategory.BOSS
-                var ldNode = il.Create(OpCodes.Ldloc, (VariableDefinition)store.Previous.Previous.Operand);
-                il.InsertAfter(store, ldNode);
-                il.InsertAfter(ldNode, il.Create(OpCodes.Ldc_I4, Boss));
-                il.InsertAfter(ldNode.Next, il.Create(OpCodes.Stfld, (FieldReference)category));
+                if (nodes.Count != 1)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one flow node with {tableField}, found {nodes.Count}");
+                }
+                var field = module.GetMemberReferences().OfType<FieldReference>()
+                    .First(f => f.Name == nodeField && f.DeclaringType.Name == "DungeonFlowNode");
+                var (after, node) = nodes[0];
+                var ldNode = il.Create(OpCodes.Ldloc, node);
+                var ldValue = il.Create(OpCodes.Ldc_I4, value);
+                il.InsertAfter(after, ldNode);
+                il.InsertAfter(ldNode, ldValue);
+                il.InsertAfter(ldValue, il.Create(OpCodes.Stfld, field));
                 method.Body.OptimizeMacros();
-                report.Count($"flow node with {tableField} -> BOSS: {typeName}.{methodName}");
+                report.Count($"flow node with {tableField}: {nodeField} = {value}: {typeName}.{methodName}");
             }
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)

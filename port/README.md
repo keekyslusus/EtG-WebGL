@@ -427,7 +427,13 @@ its Wwise bank as a TextAsset) and 57 MonoMod hooks. What it needed beyond the f
   AccessFixer forwarders now copy the constant. `bash port/monosigcheck.sh` checks the same with the real runtime:
   `port/MonoSigCheck` (built by the editor's own gmcs) reflects over every method of `Assets/Plugins` under
   `Mono/bin/mono.exe` the way a stack trace does, a crash is reported and skipped (~7 s; `modsmoke.sh` runs it first).
-- **Glitch chest floor fix** (mod bug, also in Steam; `Patcher` `BossTableNodeFixes`): Expand the Gungeon's
+- **Old West floor fix** (mod bug, also in Steam; `Patcher` `FlowNodeFixes`): the floor behind the mod's secret Old
+  West warp has a MANDATORY special room from the game's shrine table (`basic_special_rooms_noBlackMarket`). Of its
+  rooms only two are SPECIAL and both have conditions: Shrine_Cleanse needs curse >= 1, Shrine_CursedMirror 3 h played
+  and the Gungeon reached more than twice. On a save without either (a fresh browser save) the node got no room, the
+  generator threw in `GetExitPairsSimple` and the load never ended. The game only injects that table where a room
+  fits; the node is OPTIONAL now and the floor is built without the shrine room when none qualifies.
+- **Glitch chest floor fix** (mod bug, also in Steam; `Patcher` `FlowNodeFixes`): Expand the Gungeon's
   `Custom_GlitchChest_Flow` gives its glitch boss node the double beholster room table but leaves the node a CONNECTOR.
   Alexandria replaces that node of the game's `Secret_DoubleBeholster_Flow` with a table (`alexandriaGlitchTable`, boss
   rooms only), so Expand's `doublebeholstertable` is set, the generator searches it for a connector, then a normal room,

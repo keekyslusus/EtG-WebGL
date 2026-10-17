@@ -106,6 +106,8 @@ test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
   таблицы `basic_special_rooms_noBlackMarket` подходят только `Shrine_Cleanse_Room` (проклятие ≥ 1) и
   `Shrine_CursedMirror_Room` (TIME_PLAYED > 3 ч и TIMES_REACHED_GUNGEON > 2); в свежем сохранении редактора ни одной →
   NRE в `LoopBuilderComposite.GetExitPairsSimple` → бесконечная загрузка. С «наигранным» сохранением должно грузиться.
+  **Исправлено в порте 2026-10-18** (`Patcher` `FlowNodeFixes`): узел сделан OPTIONAL. Сама игра подставляет эту
+  таблицу только через инъекцию святилищ, где комната есть; если ни одно святилище не подходит, этаж строится без него.
 - Белый прямоугольник на экране загрузки — потерянная AssetRipper'ом текстура `Loading Atlas.mat`
   (`port/fix_materials.py` + `material_textures.tsv`, вызывается из `apply.sh`). Визуально не проверено.
 
@@ -123,7 +125,7 @@ test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
   грузит boss rush flow в `GameMode.BOSSRUSH`, как `GameManager.InstantLoadBossRushFloor`. Вне босс-раша
   `LoopBuilderComposite` запрещает соединять комнату босса с соседней, а во flow мода боссы идут подряд. Прогон
   `flows` с фильтром `bossrush`: все 9 boss rush flow `ok`.
-- **Исправлено в порте 2026-10-18** (`Patcher` `BossTableNodeFixes`, README → Expand the Gungeon → Glitch chest floor
+- **Исправлено в порте 2026-10-18** (`Patcher` `FlowNodeFixes`, README → Expand the Gungeon → Glitch chest floor
   fix): настоящая причина — узел glitch-босса во flow помечен CONNECTOR, а Alexandria подставляет в
   `Secret_DoubleBeholster_Flow` таблицу `alexandriaGlitchTable` из одних комнат-боссов, и генератор ищет в ней
   connector бесконечно. Узел теперь BOSS, как в `Custom_Glitch_Flow`. Ниже — как это выглядело до исправления.
@@ -141,6 +143,15 @@ test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
   `Bossrush_01a_Sewer`) — вероятно, запись глобальной инъекции с пустым `injectionData`. В режиме босс-раша этот
   метод сразу выходит, так что случай с `Bossrush_01a_Sewer` был следствием загрузки вне босс-раша; остаётся
   `TEST_West_Floor_03a_Flow`.
-- `IndexOutOfRange` в `tk2dBaseSprite.GetUntrimmedBounds` у «испорченных» врагов glitch-flow и «Material doesn't have
-  _Color» в `ExpandExtensions.Copy` — код мода, на Steam не сравнивалось.
+- `IndexOutOfRange` в `tk2dBaseSprite.GetUntrimmedBounds` у «испорченных» врагов glitch-flow — **сравнено со Steam
+  2026-10-18: там нет** (лог с `expand debug stats`: «врагов из предмета» мод создавал, исключений ноль), хотя данные
+  те же (номер спрайта BulletMan 363 в оригинальных бандлах и в наших; у наборов NPC 15–153 спрайта).
+  `ExpandEnemyCorruptor.SpawnGlitchedObjectAsEnemy` → `ExpandUtility.ApplyCustomTexture(prebuiltCollection)` вызывает
+  `SetSprite(npcCollection, sprite.spriteId)`. Геттер `spriteId` применяет отложенный кадр невидимого спрайта
+  (`tk2dSpriteAnimator.ForceInvisibleSpriteUpdate`), и тогда номер обрезается до размера набора. У «видимого» спрайта
+  номер 363 остаётся и выходит за массив в `AIShooter.Initialize`. Видимость: `renderer.isVisible` (в редакторе
+  учитывает и окно Scene) или, при ShaderQuality HIGH, расстояние до камеры. Шаблон создаётся у начала координат, в
+  игре далеко от камеры. Вывод: вероятно, только в редакторе; проверить в WebGL (`?smoketest`). Если всплывёт — в
+  порте обрезать номер в `ApplyCustomTexture`. Влияние в любом случае малое: у одного такого врага не настраивается
+  оружие. «Material doesn't have _Color» в `ExpandExtensions.Copy` в последних прогонах не появлялось.
 - Потом: тот же сценарий в WebGL (`?smoketest`), чтобы поймать IL2CPP-специфичное.
