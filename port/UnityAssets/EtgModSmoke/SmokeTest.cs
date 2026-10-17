@@ -45,6 +45,7 @@ namespace EtgModSmoke
         private readonly HashSet<int> m_baselineGuns = new HashSet<int>();
         private readonly HashSet<int> m_baselinePassives = new HashSet<int>();
         private readonly List<UnityEngine.Object> m_spawned = new List<UnityEngine.Object>();
+        private GameManager.GameMode? m_restoreGameMode; // a step switched the game mode (boss rush flows)
         private static MethodInfo s_useItem;
 
         // ---- start ---------------------------------------------------------------------------------
@@ -602,6 +603,11 @@ namespace EtgModSmoke
                 if (!GameManager.HasInstance)
                 {
                     return;
+                }
+                if (m_restoreGameMode.HasValue)
+                {
+                    GameManager.Instance.CurrentGameMode = m_restoreGameMode.Value;
+                    m_restoreGameMode = null;
                 }
                 if (GameManager.Instance.IsPaused)
                 {
@@ -1175,8 +1181,13 @@ namespace EtgModSmoke
                 }
             }
             // Flows: Expand the Gungeon's own (ExpandDungeonFlow.KnownFlows without the "_Copy" duplicates of
-            // the game's flows), loaded like its load_flow command with the tileset the flow belongs to.
-            DungeonFlow[] known = StaticMember(FindType("ExpandTheGungeon", "ExpandTheGungeon.ExpandDungeonFlows.ExpandDungeonFlow"), "KnownFlows") as DungeonFlow[];
+            // the game's flows), loaded the way the game / the mod loads them: boss rush flows in boss rush mode
+            // (GameManager.InstantLoadBossRushFloor; the generator only links boss rooms to each other there),
+            // glitch chest flows with ExpandDungeonFlow.isGlitchFlow on Phobos and Space
+            // (ExpandUtility.DelayedGlitchLevelLoad), the rest with the tileset the flow name belongs to.
+            Type expandFlows = FindType("ExpandTheGungeon", "ExpandTheGungeon.ExpandDungeonFlows.ExpandDungeonFlow");
+            DungeonFlow[] known = StaticMember(expandFlows, "KnownFlows") as DungeonFlow[];
+            List<string> glitchFlows = StaticMember(expandFlows, "GlitchChestFlows") as List<string> ?? new List<string>();
             if (known != null)
             {
                 foreach (DungeonFlow flow in known)
@@ -1185,13 +1196,25 @@ namespace EtgModSmoke
                     {
                         continue;
                     }
+                    string mode = flow.name.ToLowerInvariant().Contains("bossrush") ? FlowModeBossRush
+                        : glitchFlows.Contains(flow.name.ToLowerInvariant()) ? FlowModeGlitch : "";
                     string[] tileset = FlowTileset(flow.name);
-                    StepResult s = AddStep("flow", flow.name, flow.name + " @ " + tileset[0], "ExpandTheGungeon", null);
-                    loads[s.Key] = new[] { "flow", flow.name, tileset[0], tileset[1] };
+                    StepResult s = AddStep("flow", flow.name, flow.name + " @ " + tileset[0] + (mode == "" ? "" : " (" + mode + ")"), "ExpandTheGungeon", null);
+                    loads[s.Key] = new[] { "flow", flow.name, tileset[0], tileset[1], mode };
                     flows.Add(s);
+                    if (mode == FlowModeGlitch)
+                    {
+                        // the mod picks Phobos or Space at random
+                        s = AddStep("flow", flow.name + "@Base_Space", flow.name + " @ Base_Space (" + mode + ")", "ExpandTheGungeon", null);
+                        loads[s.Key] = new[] { "flow", flow.name, "Base_Space", "tt_space", mode };
+                        flows.Add(s);
+                    }
                 }
             }
         }
+
+        private const string FlowModeBossRush = "boss rush";
+        private const string FlowModeGlitch = "glitch";
 
         // Prefix of the flow name -> dungeon prefab and level (scene) name.
         private static readonly string[][] FlowTilesets =
@@ -1212,6 +1235,9 @@ namespace EtgModSmoke
             new[] { "bossrush_04_catacombs", "Base_Catacombs", "tt_catacombs" },
             new[] { "bossrush_05_forge", "Base_Forge", "tt_forge" },
             new[] { "bossrush_06_bullethell", "Base_BulletHell", "tt_bullethell" },
+            // glitch chest floors (ExpandUtility.DelayedGlitchLevelLoad: Phobos or Space)
+            new[] { "custom_glitch", "Base_Phobos", "tt_phobos" },
+            new[] { "apache_fucking_around", "Base_Phobos", "tt_phobos" },
         };
 
         private static string[] FlowTileset(string flow)
@@ -1295,6 +1321,18 @@ namespace EtgModSmoke
             }
             else
             {
+                if (load[4] == FlowModeBossRush)
+                {
+                    // Cleanup puts the mode back after the step
+                    m_restoreGameMode = gm.CurrentGameMode;
+                    gm.CurrentGameMode = GameManager.GameMode.BOSSRUSH;
+                }
+                else if (load[4] == FlowModeGlitch)
+                {
+                    // the mod clears it again once the level is set up (ExpandObjectMods)
+                    FieldInfo glitch = FindType("ExpandTheGungeon", "ExpandTheGungeon.ExpandDungeonFlows.ExpandDungeonFlow").GetField("isGlitchFlow", BindingFlags.Static | BindingFlags.Public);
+                    glitch.SetValue(null, true);
+                }
                 gm.LoadCustomFlowForDebug(load[1], load[2], load[3]);
             }
             float t0 = Now;

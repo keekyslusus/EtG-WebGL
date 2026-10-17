@@ -427,6 +427,13 @@ its Wwise bank as a TextAsset) and 57 MonoMod hooks. What it needed beyond the f
   AccessFixer forwarders now copy the constant. `bash port/monosigcheck.sh` checks the same with the real runtime:
   `port/MonoSigCheck` (built by the editor's own gmcs) reflects over every method of `Assets/Plugins` under
   `Mono/bin/mono.exe` the way a stack trace does, a crash is reported and skipped (~7 s; `modsmoke.sh` runs it first).
+- **Glitch chest floor fix** (mod bug, also in Steam; `Patcher` `BossTableNodeFixes`): Expand the Gungeon's
+  `Custom_GlitchChest_Flow` gives its glitch boss node the double beholster room table but leaves the node a CONNECTOR.
+  Alexandria replaces that node of the game's `Secret_DoubleBeholster_Flow` with a table (`alexandriaGlitchTable`, boss
+  rooms only), so Expand's `doublebeholstertable` is set, the generator searches it for a connector, then a normal room,
+  backtracks without end and the floor loads forever (the glitch elevator picks this flow for about 1 in 6 glitch
+  floors). The patcher makes that node BOSS like the same node of `Custom_Glitch_Flow`; Alexandria's
+  `UsesGlobalBossData` patch then takes the room from its table, i.e. the glitch boss.
 - **The game's assets by their original names** (`bundle_names.py` -> `bundle_renames.tsv`, applied by `apply.sh`):
   the mod loads game assets by name (`LoadAsset<Shader>("BraveLitTk2dCustomFalloffCutout")`, the room table
   "basic special rooms (shrines, etc)"), and a bundle finds them by path or file name. AssetRipper had exported 38 of
@@ -462,8 +469,12 @@ nobody at the keyboard (don't touch the Game view while it runs):
    without a bundle path - spawned next to the player (`AIActor.Spawn`), killed after 3 s, leftovers erased;
 5. every mod floor (Expand the Gungeon's dungeon prefabs with the game's level definition, `LoadCustomLevel` as the
    mod does) and flow (`ExpandDungeonFlow.KnownFlows` without the `_Copy` duplicates of the game's flows, through
-   `LoadCustomFlowForDebug` with the tileset the flow name belongs to, as `load_flow` would); after generation the
-   player warps into up to 12 rooms (not boss rooms), clearing what woke up.
+   `LoadCustomFlowForDebug` the way the game / the mod loads it: boss rush flows in `GameMode.BOSSRUSH` like
+   `GameManager.InstantLoadBossRushFloor` - outside it the generator won't link boss rooms to their neighbours and
+   skips no injections, so the mod's `Bossrush_01_Castle` / `MiniBossRush_01` never generated; the glitch chest flows
+   of `ExpandDungeonFlow.GlitchChestFlows` with `isGlitchFlow` on Phobos and again on Space like
+   `ExpandUtility.DelayedGlitchLevelLoad`; the rest with the tileset the flow name belongs to, as `load_flow` would);
+   after generation the player warps into up to 12 rooms (not boss rooms), clearing what woke up.
 
 After each step everything the step left is removed (items, guns, debris, spawned objects; the player is healed,
 unpaused, time scale and input overrides cleared); if the run is lost (player gone, back in the Breach) the next

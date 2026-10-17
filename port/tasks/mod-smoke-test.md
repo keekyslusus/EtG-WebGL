@@ -119,12 +119,28 @@ test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
 - Вылет Mono при `DEMO_STAGE_FLOW` (переполнение стека: `mono_traverse_array` ↔ `mono_traverse_objects` при
   `UnloadUnusedAssets`) — в WebGL не грозит: в IL2CPP та же рекурсия ограничена 128 уровнями
   (`il2cpp/libil2cpp/vm/Liveness.cpp`, `kMaxTraverseRecursionDepth`). В редакторе остаётся.
-- `Custom_GlitchChest_Flow` с `Base_Gungeon` генерируется бесконечно (тайлсет подобран тестом наугад);
-  `Bossrush_01_Castle` и `MiniBossRush_01` стабильно не генерируются (6 неудачных итераций подряд в каждом прогоне;
-  загружались через `LoadCustomFlowForDebug`, не в режиме босс-раша). Грузятся 28 из 32 flow
-  (`report-flows-recheck.md`: `Fruit_Loops`, `Bossrush_04_Catacombs` после поднятия порога неудач генерации до 6).
+- ~~`Bossrush_01_Castle` и `MiniBossRush_01` не генерируются~~ — **ошибка теста, исправлено 2026-10-18**: тест теперь
+  грузит boss rush flow в `GameMode.BOSSRUSH`, как `GameManager.InstantLoadBossRushFloor`. Вне босс-раша
+  `LoopBuilderComposite` запрещает соединять комнату босса с соседней, а во flow мода боссы идут подряд. Прогон
+  `flows` с фильтром `bossrush`: все 9 boss rush flow `ok`.
+- **Исправлено в порте 2026-10-18** (`Patcher` `BossTableNodeFixes`, README → Expand the Gungeon → Glitch chest floor
+  fix): настоящая причина — узел glitch-босса во flow помечен CONNECTOR, а Alexandria подставляет в
+  `Secret_DoubleBeholster_Flow` таблицу `alexandriaGlitchTable` из одних комнат-боссов, и генератор ищет в ней
+  connector бесконечно. Узел теперь BOSS, как в `Custom_Glitch_Flow`. Ниже — как это выглядело до исправления.
+- `Custom_GlitchChest_Flow` генерируется бесконечно и на тайлсетах мода (`Base_Phobos` и `Base_Space` с
+  `isGlitchFlow`, как `ExpandUtility.DelayedGlitchLevelLoad`), так что тайлсет был ни при чём. В
+  `Test Mega Room Table 2` (fallback этого flow) пригодных комнат 1348 из 1350, а генератор в
+  `GetAvailableRoomByExitDirection` не находит ни CONNECTOR, ни NORMAL ни на одном уровне fallback (первая догадка
+  «у родителя нет свободного выхода» оказалась неверной: искал он в таблице glitch-босса, см. выше). **Баг мода, подтверждено на Steam 2026-10-18** (`load_flow custom_glitchchest_flow Base_Space tt_space`: те же
+  ошибки, вечная загрузка; у пользователя повисла и `custom_glitch_flow` на Phobos, которая в Play Mode грузилась, —
+  генерация случайна). Особых условий нет: glitch-лифт мода (`ExpandElevatorDepartureManager` /
+  `ExpandNewElevatorController`, `IsGlitchElevator`) вызывает `DelayedGlitchLevelLoad` ровно так же. В игре мод
+  выбирает этот flow примерно в 1 из 6 glitch-этажей. Остальные glitch-flow на Phobos и Space генерируются; NRE в `ExpandSpawnGlitchObjectOnDeath`
+  (`objectsToSpawn` задаётся в конструкторе) — ограничение Play Mode.
 - NRE в `LoopFlowBuilder.AttachPregeneratedInjectionData` (плавающий, после рестарта забега; `TEST_West_Floor_03a_Flow`,
-  `Bossrush_01a_Sewer`) — вероятно, запись глобальной инъекции с пустым `injectionData`.
+  `Bossrush_01a_Sewer`) — вероятно, запись глобальной инъекции с пустым `injectionData`. В режиме босс-раша этот
+  метод сразу выходит, так что случай с `Bossrush_01a_Sewer` был следствием загрузки вне босс-раша; остаётся
+  `TEST_West_Floor_03a_Flow`.
 - `IndexOutOfRange` в `tk2dBaseSprite.GetUntrimmedBounds` у «испорченных» врагов glitch-flow и «Material doesn't have
   _Color» в `ExpandExtensions.Copy` — код мода, на Steam не сравнивалось.
 - Потом: тот же сценарий в WebGL (`?smoketest`), чтобы поймать IL2CPP-специфичное.

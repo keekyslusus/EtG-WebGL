@@ -1,5 +1,6 @@
 using Mono.Cecil;
 using Mono.Cecil.Cil;
+using Mono.Cecil.Rocks;
 
 namespace EtgWebPatcher;
 
@@ -122,6 +123,18 @@ internal static partial class Program
     private static readonly (string Type, string Method, int Literal, string NextCall, string ShimType, string ShimMethod)[] LiteralShims =
     {
         ("Alexandria.PrefabAPI.AssetBundleBuilder", "BuildBundleFile", 19, "Write", "WebShim.BundleShim", "RuntimeBundleTargetPlatform"),
+    };
+
+    // Mod bug fixes in dungeon flows built in code: after `node.overrideRoomTable = <Type>::<Field>` in the method, the
+    // node's roomCategory becomes BOSS. Expand the Gungeon's Custom_GlitchChest_Flow gives its glitch boss node the
+    // double beholster room table but leaves it a CONNECTOR; with Alexandria that table exists (alexandriaGlitchTable,
+    // boss rooms only), the generator looks for a connector in it forever and the glitch chest floor never loads -
+    // in the Steam game too. Custom_Glitch_Flow has the same node as BOSS, and Alexandria's UsesGlobalBossData patch
+    // then takes the room from its table (the glitch boss, not the floor's boss).
+    private static readonly (string Type, string Method, string TableType, string TableField)[] BossTableNodeFixes =
+    {
+        ("ExpandTheGungeon.ExpandDungeonFlows.custom_glitchchest_flow", "m_Custom_GlitchChest_Flow",
+            "ExpandTheGungeon.ExpandPrefab.ExpandPrefabs", "doublebeholstertable"),
     };
 
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
@@ -316,6 +329,35 @@ internal static partial class Program
                     throw new InvalidOperationException($"{typeName}.{methodName}: expected one {literal} passed to {nextCall}, found {count}");
                 }
                 report.Count($"literal {literal} -> {target.DeclaringType.Name}.{target.Name}: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName, tableType, tableField) in BossTableNodeFixes)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                method.Body.SimplifyMacros();
+                var il = method.Body.GetILProcessor();
+                // ldloc node; ldsfld <table>; stfld DungeonFlowNode::overrideRoomTable
+                var stores = method.Body.Instructions.Where(ins => ins.OpCode == OpCodes.Stfld
+                    && ins.Operand is FieldReference f && f.Name == "overrideRoomTable" && f.DeclaringType.Name == "DungeonFlowNode"
+                    && ins.Previous?.OpCode == OpCodes.Ldsfld && ins.Previous.Operand is FieldReference t
+                    && t.Name == tableField && t.DeclaringType.FullName == tableType
+                    && ins.Previous.Previous?.OpCode == OpCodes.Ldloc).ToList();
+                if (stores.Count != 1)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one node.overrideRoomTable = {tableField}, found {stores.Count}");
+                }
+                var store = stores[0];
+                // the node initializers of the same method set roomCategory: reuse that field reference
+                var category = method.Body.Instructions.First(ins => ins.OpCode == OpCodes.Stfld
+                    && ins.Operand is FieldReference f && f.Name == "roomCategory" && f.DeclaringType.Name == "DungeonFlowNode").Operand;
+                const int Boss = 3; // PrototypeDungeonRoom.RoomCategory.BOSS
+                var ldNode = il.Create(OpCodes.Ldloc, (VariableDefinition)store.Previous.Previous.Operand);
+                il.InsertAfter(store, ldNode);
+                il.InsertAfter(ldNode, il.Create(OpCodes.Ldc_I4, Boss));
+                il.InsertAfter(ldNode.Next, il.Create(OpCodes.Stfld, (FieldReference)category));
+                method.Body.OptimizeMacros();
+                report.Count($"flow node with {tableField} -> BOSS: {typeName}.{methodName}");
             }
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)
