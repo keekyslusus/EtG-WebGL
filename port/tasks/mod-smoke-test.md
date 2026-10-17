@@ -110,11 +110,15 @@ test. Отчёт — `port/build/modsmoke/report.md` / `.json`.
   (`port/fix_materials.py` + `material_textures.tsv`, вызывается из `apply.sh`). Визуально не проверено.
 
 Открыто (не порт либо не выяснено):
-- Вылет Mono редактора (`mono_class_from_mono_type: implement me 0x00` при форматировании стека исключения в
-  `LateUpdate`) на Cascading Bullets после Bone Parade — плавающий; гипотеза: NRE в `CascadingBullets.OnDidDamage`
-  (`target.gameActor` у целей без актора, кость Bone Parade попала в бочку). IL2CPP этим Mono не пользуется.
-- Вылет Mono при `DEMO_STAGE_FLOW`: переполнение стека в `mono_traverse_objects` (liveness при `UnloadUnusedAssets`) —
-  проверить в WebGL.
+- ~~Вылет Mono редактора (`mono_class_from_mono_type: implement me 0x00`) на Cascading Bullets после Bone Parade~~ —
+  **ошибка порта, исправлено 2026-10-18**: клоны `*_orig_bakedN` из HookBaker копировали флаг HasDefault параметра без
+  значения (Constant), а Mono 2.x на таком параметре падает в `GetParameters()`, который вызывает
+  `Exception.StackTrace` для каждого кадра. В стек попадал `Projectile.HandleDamage_orig_baked10`. Всего было 4 метода,
+  найдены офлайн через `bash port/monosigcheck.sh` (настоящий Mono редактора, ~7 с, запускается из `modsmoke.sh`);
+  `Patcher verify` теперь тоже это ловит. В IL2CPP падения не было бы: там нет этого кода Mono.
+- Вылет Mono при `DEMO_STAGE_FLOW` (переполнение стека: `mono_traverse_array` ↔ `mono_traverse_objects` при
+  `UnloadUnusedAssets`) — в WebGL не грозит: в IL2CPP та же рекурсия ограничена 128 уровнями
+  (`il2cpp/libil2cpp/vm/Liveness.cpp`, `kMaxTraverseRecursionDepth`). В редакторе остаётся.
 - `Custom_GlitchChest_Flow` с `Base_Gungeon` генерируется бесконечно (тайлсет подобран тестом наугад);
   `Bossrush_01_Castle` и `MiniBossRush_01` стабильно не генерируются (6 неудачных итераций подряд в каждом прогоне;
   загружались через `LoadCustomFlowForDebug`, не в режиме босс-раша). Грузятся 28 из 32 flow

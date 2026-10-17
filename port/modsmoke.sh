@@ -27,6 +27,13 @@ if unity_running; then
     exit 1
 fi
 mkdir -p "$OUT"
+# A plugin method that aborts the editor's Mono on reflection would crash the editor on the first exception
+# stack trace through it (~7 s, port/monosigcheck.sh).
+if ! bash "$PORT/monosigcheck.sh" > "$OUT/monosigcheck.log" 2>&1; then
+    echo "Methods in Assets/Plugins crash the editor's Mono (see $OUT/monosigcheck.log):" >&2
+    grep "^CRASH" "$OUT/monosigcheck.log" | sort -u >&2
+    exit 1
+fi
 [ "${RESUME:-0}" = 1 ] || rm -f "$OUT/resume"   # RESUME=1: carry on from the last report.json
 
 attempt=0
@@ -42,7 +49,18 @@ while [ "$failures" -lt "$MAX_ATTEMPTS" ]; do
     last_size=-1
     quiet=0
     hung=0
+    broken=0
     while unity_running; do
+        # The editor's script domain can come up broken right after apply.sh replaced the plugins (seen on the
+        # first start after a re-bake): Unity's own UnityEngine.Timeline / UI don't resolve, FullInspector throws
+        # in every deserialization and the log never goes quiet for the watchdog. A fresh start fixes it.
+        if grep -q "Could not load file or assembly 'UnityEngine.\(Timeline\|UI\)," "$LOG" 2>/dev/null; then
+            echo "== the editor's script domain is broken (UnityEngine.Timeline / UI don't load), restarting it"
+            taskkill //IM Unity.exe //F > /dev/null 2>&1
+            broken=1
+            sleep 5
+            break
+        fi
         size=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
         if [ "$size" = "$last_size" ]; then
             quiet=$((quiet + 10))
@@ -70,6 +88,10 @@ while [ "$failures" -lt "$MAX_ATTEMPTS" ]; do
         crashed=1
         echo "== the editor crashed (bug reporter closed without sending); last test lines of Editor.log:"
         grep "\[ModSmoke\]" "$LOG" | tail -3
+    fi
+    if [ "$broken" = 1 ]; then
+        failures=$((failures + 1))   # same request again; resume state as before this attempt
+        continue
     fi
     state=$(grep -m1 -o "state: \*\*[^*]*\*\*" "$OUT/report.md" 2>/dev/null)
     echo "== attempt $attempt over: $state"

@@ -457,6 +457,16 @@ internal static partial class Program
                         missingMembers[$"  broken branch target in {method.FullName}"] = 1;
                     }
                 }
+                // HasDefault without a Constant row: Mono 2.x (editor Play Mode) aborts in GetParameters, i.e. on
+                // the first exception stack trace that passes through the method (port/monosigcheck.sh checks this
+                // with the real runtime).
+                foreach (var method in AllTypes(module).SelectMany(t => t.Methods))
+                {
+                    if (method.Parameters.Any(p => p.Attributes.HasFlag(ParameterAttributes.HasDefault) && !p.HasConstant))
+                    {
+                        missingMembers[$"  parameter default flag without a value in {method.FullName}"] = 1;
+                    }
+                }
             }
             if (missingAssemblies.Count + missingTypes.Count + missingMembers.Count == 0)
             {

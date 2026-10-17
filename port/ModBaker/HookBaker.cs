@@ -401,6 +401,12 @@ internal sealed class HookBaker
         foreach (var p in target.Parameters)
         {
             var np = new ParameterDefinition(p.Name, p.Attributes, p.ParameterType);
+            // HasDefault without a Constant row aborts Mono 2.x in GetParameters (editor crash on any stack trace
+            // through the clone: "mono_class_from_mono_type: implement me 0x00").
+            if (p.HasConstant)
+            {
+                np.Constant = p.Constant;
+            }
             clone.Parameters.Add(np);
             argMap[p] = np;
         }

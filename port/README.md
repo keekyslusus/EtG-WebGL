@@ -419,6 +419,14 @@ its Wwise bank as a TextAsset) and 57 MonoMod hooks. What it needed beyond the f
 - `Patcher verify` also fails on a branch whose target isn't an instruction: code inserted in front of a call
   without first switching to long branch forms (`SimplifyMacros`) silently overflowed a short branch, and il2cpp died
   with a NullReferenceException in its control-flow graph after 20 minutes of building.
+- `Patcher verify` also fails on a parameter with the HasDefault flag but no Constant row: the editor's Mono 2.x
+  aborts in `MethodBase.GetParameters()` (`mono_class_from_mono_type: implement me 0x00`), which
+  `Exception.StackTrace` calls for every frame - so the first exception whose stack passed such a method killed the
+  editor (smoke test: Cascading Bullets after Bone Parade, through `Projectile.HandleDamage`). HookBaker's
+  `*_orig_bakedN` clones copied the parameter flags without the default value (4 hooked methods); clones and
+  AccessFixer forwarders now copy the constant. `bash port/monosigcheck.sh` checks the same with the real runtime:
+  `port/MonoSigCheck` (built by the editor's own gmcs) reflects over every method of `Assets/Plugins` under
+  `Mono/bin/mono.exe` the way a stack trace does, a crash is reported and skipped (~7 s; `modsmoke.sh` runs it first).
 - **The game's assets by their original names** (`bundle_names.py` -> `bundle_renames.tsv`, applied by `apply.sh`):
   the mod loads game assets by name (`LoadAsset<Shader>("BraveLitTk2dCustomFalloffCutout")`, the room table
   "basic special rooms (shrines, etc)"), and a bundle finds them by path or file name. AssetRipper had exported 38 of
@@ -487,8 +495,13 @@ restart after a dead level load spun forever) or a crash of the editor can't be 
 script's watchdog kills the editor when Editor.log stays silent for `HANG_MINUTES` (6), closes the bug reporter
 and starts the next attempt with `port/build/modsmoke/resume`: steps already done are taken over from
 `report.json` (the report is written at the start of each step too), the one that was running is reported as
-**hang** and the run goes on after it (`MAX_ATTEMPTS` 8; `RESUME=1` continues an interrupted run by hand). Before each action the test writes `[ModSmoke]   . <action>` to
-Editor.log: when Mono itself crashes (the report can't record that) the last such line says what was going on; the
+**hang** and the run goes on after it (`MAX_ATTEMPTS` 8; `RESUME=1` continues an interrupted run by hand). The first
+editor start after `apply.sh` can come up with a broken script domain (Unity's own `UnityEngine.Timeline` / `UI` not
+found, FullInspector throwing in every deserialization - Editor.log grew to 1.3 GB in 30 min and never went quiet): the
+script kills that editor and starts it again with the same request. Before each action the test writes `[ModSmoke]   . <action>` to
+Editor.log: when Mono itself crashes (the report can't record that) the last such line says what was going on
+(exceptions the test catches itself get a stack of type + method names only, `SmokeLog.SafeStackTrace`, so formatting
+them can't take Mono down; Unity formats the ones out of game callbacks itself); the
 script closes the Unity Bug Reporter without sending (it attaches the whole project). With floors or flows a `diag`
 step lists the room tables of Expand the Gungeon with entries the generator can't use (no room, failing
 prerequisites). An error whose first frames are in a MonoBehaviour the editor refused to construct ("Called from

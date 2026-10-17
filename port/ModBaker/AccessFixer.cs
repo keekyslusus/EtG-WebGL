@@ -337,7 +337,13 @@ internal sealed class AccessFixer
             foreach (var c in inner.GenericParameters[i].Constraints) f.GenericParameters[i].Constraints.Add(MapGp(c, f));
         }
         f.ReturnType = MapGp(inner.ReturnType, f);
-        foreach (var p in inner.Parameters) f.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, MapGp(p.ParameterType, f)));
+        foreach (var p in inner.Parameters)
+        {
+            // Keep the Constant with HasDefault: one without the other aborts Mono 2.x in GetParameters.
+            var np = new ParameterDefinition(p.Name, p.Attributes, MapGp(p.ParameterType, f));
+            if (p.HasConstant) np.Constant = p.Constant;
+            f.Parameters.Add(np);
+        }
         var il = f.Body.GetILProcessor();
         foreach (var p in f.Parameters) il.Emit(OpCodes.Ldarg, p);
         MethodReference call = inner;

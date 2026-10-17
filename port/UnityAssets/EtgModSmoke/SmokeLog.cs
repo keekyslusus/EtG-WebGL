@@ -268,7 +268,39 @@ namespace EtgModSmoke
             {
                 inner = inner.InnerException;
             }
-            Record(inner.GetType().Name, inner.GetType().Name + ": " + inner.Message + " [" + where + "]", inner.StackTrace);
+            Record(inner.GetType().Name, inner.GetType().Name + ": " + inner.Message + " [" + where + "]", SafeStackTrace(inner));
+        }
+
+        // Exception.StackTrace calls GetParameters() on every frame, and the editor's Mono 2.x aborts the whole
+        // process there on a method with a malformed parameter (HasDefault without a Constant row: "mono_class_
+        // from_mono_type: implement me 0x00"). Only type and method names are touched here, so the exception
+        // still gets recorded; port/monosigcheck.sh finds such methods offline.
+        public static string SafeStackTrace(Exception e)
+        {
+            StringBuilder sb = new StringBuilder();
+            try
+            {
+                foreach (System.Diagnostics.StackFrame f in new System.Diagnostics.StackTrace(e, true).GetFrames() ?? new System.Diagnostics.StackFrame[0])
+                {
+                    MethodBase m = f.GetMethod();
+                    if (m == null)
+                    {
+                        continue;
+                    }
+                    sb.Append("  at ").Append(m.DeclaringType != null ? m.DeclaringType.FullName + "." : "").Append(m.Name).Append(" (...)");
+                    string file = f.GetFileName();
+                    if (!string.IsNullOrEmpty(file))
+                    {
+                        sb.Append(" in ").Append(file).Append(':').Append(f.GetFileLineNumber());
+                    }
+                    sb.Append('\n');
+                }
+            }
+            catch (Exception walk)
+            {
+                sb.Append("  (stack walk failed: ").Append(walk.GetType().Name).Append(")\n");
+            }
+            return sb.ToString();
         }
 
         private static void Record(string errorType, string condition, string stackTrace)
