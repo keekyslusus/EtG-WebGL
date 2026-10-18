@@ -7,6 +7,16 @@ interface Window {
   Etg: Record<string, any>;
   /** port/audio/etg-audio.js, called by EtgWebShim.jslib */
   EtgAudio: Record<string, any>;
+  /** etg-build.js next to Build/ (EtgWebBuild.CopySite, port/site/install.py): the player's files */
+  EtgBuild?: {
+    loader: string;
+    data: string;
+    framework: string;
+    code: string;
+    companyName: string;
+    productName: string;
+    productVersion: string;
+  };
 }
 
 interface Document {
@@ -22,22 +32,17 @@ interface Navigator {
   keyboard?: { lock(keyCodes?: string[]): Promise<void>; unlock(): void };
 }
 
-/** Unity 2017.4's WebGL loader (Build/UnityLoader.js), the parts the page uses. */
+/** Unity 6's WebGL loader (Build/<name>.loader.js), the parts the page uses. */
 interface UnityInstance {
-  Module: { canvas?: HTMLCanvasElement; [key: string]: any };
+  Module: { canvas: HTMLCanvasElement; [key: string]: any };
+  SetFullscreen(fullscreen: number): void;
+  SendMessage(objectName: string, methodName: string, value?: string | number): void;
+  Quit(): Promise<void>;
   [key: string]: any;
 }
 
-declare const UnityLoader: {
-  instantiate(
-    container: HTMLElement | string,
-    url: string,
-    options?: {
-      onProgress?: (instance: UnityInstance, progress: number) => void;
-      compatibilityCheck?: (instance: UnityInstance, ok: () => void, fail: () => void) => void;
-      [key: string]: any;
-    },
-  ): UnityInstance;
-  SystemInfo: { hasWebGL: number; [key: string]: any };
-  Cryptography: { md5(data: Uint8Array): Uint8Array };
-};
+declare function createUnityInstance(
+  canvas: HTMLCanvasElement,
+  config: { dataUrl: string; frameworkUrl: string; codeUrl: string; [key: string]: any },
+  onProgress?: (progress: number) => void,
+): Promise<UnityInstance>;

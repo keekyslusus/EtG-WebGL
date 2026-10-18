@@ -1,5 +1,5 @@
 // Code of the page around the WebGL build (port/site -> webbuild): pixel icons, save
-// export/import straight from the IndexedDB that Unity's IDBFS keeps, fullscreen, the UnityLoader
+// export/import straight from the IndexedDB that Unity's IDBFS keeps, fullscreen, the Unity loader
 // glue and a frame monitor.
 // Plain ES5-ish browser JS, no dependencies.
 (function () {
@@ -174,9 +174,10 @@
 
   // ------------------------------------------------------------------ saves (IDBFS)
 
-  // Unity mounts IDBFS at /idbfs: database "/idbfs", object store FILE_DATA, keyed by full path,
-  // values {timestamp: Date, mode, contents?: Uint8Array}. Application.persistentDataPath is
-  // /idbfs/<md5 of the page URL up to (not incl.) its last "/">: pages in one folder share saves.
+  // Unity mounts IDBFS at /idbfs (2017.4 and 6.6: Emscripten's IDBFS, prejs/IdbFs.js): database "/idbfs", object
+  // store FILE_DATA, keyed by full path, values {timestamp: Date, mode, contents?: Uint8Array}.
+  // Application.persistentDataPath is /idbfs/<md5 of the page URL up to (not incl.) its last "/">: pages in one
+  // folder share saves. (Unity 6 computes it natively; listSaves falls back to the newest save folder.)
   var IDB_NAME = "/idbfs", IDB_STORE = "FILE_DATA", IDB_VERSION = 21;
   var S_IFMT = 61440, S_IFDIR = 16384, S_IFREG = 32768;
   // The game's own files: SlotA.save, SlotA.options, SlotA.backup.90h43m, ... and Unity's
@@ -216,12 +217,55 @@
     });
   }
 
+  // MD5 (RFC 1321) of bytes -> 16 bytes. Unity 2017.4's loader had one (UnityLoader.Cryptography); Unity 6's doesn't
+  // expose it, and the player still names the save folder by it.
+  var MD5_S = [7, 12, 17, 22, 5, 9, 14, 20, 4, 11, 16, 23, 6, 10, 15, 21];
+  var MD5_K = [];
+  for (var ki = 0; ki < 64; ki++) MD5_K[ki] = (Math.abs(Math.sin(ki + 1)) * 4294967296) >>> 0;
+
+  function md5(data) {
+    var n = data.length, size = ((n + 72) >>> 6) << 6;
+    var buf = new Uint8Array(size);
+    buf.set(data);
+    buf[n] = 0x80;
+    var view = new DataView(buf.buffer);
+    view.setUint32(size - 8, (n * 8) >>> 0, true);
+    view.setUint32(size - 4, Math.floor(n / 536870912), true);
+    var h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
+    var m = new Array(16);
+    for (var off = 0; off < size; off += 64) {
+      for (var j = 0; j < 16; j++) m[j] = view.getUint32(off + 4 * j, true);
+      var a = h[0], b = h[1], c = h[2], d = h[3];
+      for (var i = 0; i < 64; i++) {
+        var f, g;
+        if (i < 16) { f = (b & c) | (~b & d); g = i; }
+        else if (i < 32) { f = (d & b) | (~d & c); g = (5 * i + 1) & 15; }
+        else if (i < 48) { f = b ^ c ^ d; g = (3 * i + 5) & 15; }
+        else { f = c ^ (b | ~d); g = (7 * i) & 15; }
+        f = (f + a + MD5_K[i] + m[g]) | 0;
+        var s = MD5_S[(i >> 4) * 4 + (i & 3)];
+        a = d;
+        d = c;
+        c = b;
+        b = (b + ((f << s) | (f >>> (32 - s)))) | 0;
+      }
+      h[0] = (h[0] + a) | 0;
+      h[1] = (h[1] + b) | 0;
+      h[2] = (h[2] + c) | 0;
+      h[3] = (h[3] + d) | 0;
+    }
+    var out = new Uint8Array(16);
+    var outView = new DataView(out.buffer);
+    for (var w = 0; w < 4; w++) outView.setUint32(4 * w, h[w], true);
+    return out;
+  }
+
   function md5Hex(text) {
-    var bytes = new TextEncoder().encode(text);
-    return [].slice.call(UnityLoader.Cryptography.md5(bytes)).map(function (x) {
+    return [].slice.call(md5(new TextEncoder().encode(text))).map(function (x) {
       return ("0" + x.toString(16)).substr(-2);
     }).join("");
   }
+  Etg.md5Hex = md5Hex;
 
   /** Unity's persistentDataPath for this page: md5 of the page's folder URL, no trailing "/". */
   Etg.saveDir = function () {
@@ -426,57 +470,92 @@
   // ------------------------------------------------------------------ game loader
 
   /**
-   * Starts UnityLoader on `container`. callbacks: progress(fraction 0..1, label, bytes), ready(),
-   * error(msg); bytes = {loaded, total} of the download so far (total 0 until known).
-   * Unity reports 0..0.9 while downloading/compiling and 1 once the runtime has started.
+   * Starts the player (Unity 6's createUnityInstance) in a canvas it adds to `container`. The build's file names
+   * come from etg-build.js (window.EtgBuild, written next to Build/ by EtgWebBuild.CopySite / install.py).
+   * callbacks: progress(fraction 0..1, label, bytes), ready(instance), error(msg); bytes = {loaded, total} of the
+   * download so far (total 0 until known). Unity reports 0..0.9 while downloading and 1 once the runtime has
+   * started; ready comes when the player has initialized (Etg.game is set then).
    */
   Etg.startGame = function (container, callbacks) {
     var cb = callbacks || {};
-    var reported = -1;
-    function bytes(instance) {
-      var loaded = 0, total = 0, all = instance.Module.buildDownloadProgress || {};
-      for (var id in all) {
-        if (all[id].lengthComputable) {
-          loaded += all[id].loaded;
-          total += all[id].total;
+    function fail(msg) {
+      if (cb.error) cb.error(msg);
+      else console.error(msg);
+    }
+    var build = window.EtgBuild;
+    if (!build) return fail("etg-build.js is missing (copy the page with port/site/install.py)");
+    if (!document.createElement("canvas").getContext("webgl2")) return fail("This browser has no WebGL 2");
+
+    var canvas = document.createElement("canvas");
+    // Unity registers its key/mouse handlers on "#" + canvas.id (Emscripten's findEventTarget): no id, no game
+    canvas.id = "unity-canvas";
+    canvas.tabIndex = -1;
+    container.appendChild(canvas);
+    // The game applies its saved display mode at startup; EtG defaults to FULLSCREEN, so it calls
+    // Screen.SetResolution(.., true) and Unity runs canvas.requestFullscreen() on the next click.
+    // Route that to the page's fullscreen: the toolbar stays visible and Esc stays with the game.
+    canvas.requestFullscreen = canvas.webkitRequestFullscreen = function () {
+      Etg.enterFullscreen();
+      return Promise.resolve();
+    };
+
+    // createUnityInstance copies the config into its Module: this object becomes Module.downloadProgress,
+    // {url: {started, finished, lengthComputable, loaded, total}}.
+    var files = {};
+    function bytes() {
+      var loaded = 0, total = 0;
+      for (var url in files) {
+        if (files[url].lengthComputable) {
+          loaded += files[url].loaded;
+          total += files[url].total;
         }
       }
       return { loaded: loaded, total: total };
     }
-    function progress(instance, p) {
-      if (p >= 1) {
-        if (reported >= 1) return;
-        reported = 1;
-        if (cb.progress) cb.progress(1, "Ready", bytes(instance));
-        if (cb.ready) cb.ready(instance);
-      } else if (cb.progress) {
+    var reported = -1;
+    function progress(p) {
+      if (cb.progress && p > reported && reported < 1) {
         reported = p;
-        cb.progress(p, p >= 0.9 ? "Starting" : "Loading", bytes(instance));
+        cb.progress(p, p >= 0.9 ? "Starting" : "Loading", bytes());
       }
     }
-    var instance = UnityLoader.instantiate(container, "Build/webbuild.json", {
-      onProgress: progress,
-      compatibilityCheck: function (inst, ok, fail) {
-        if (UnityLoader.SystemInfo.hasWebGL < 2) {
-          if (cb.error) cb.error("This browser has no WebGL 2");
-          fail();
-        } else {
-          ok();
-        }
-      },
-    });
-    // The game applies its saved display mode at startup; EtG defaults to FULLSCREEN, so it calls
-    // Screen.SetResolution(.., true) and Unity runs canvas.requestFullscreen() on the next click.
-    // Route that to the page's fullscreen: the toolbar stays visible and Esc stays with the game.
-    var canvas = instance.Module.canvas;
-    if (canvas) {
-      canvas.requestFullscreen = canvas.webkitRequestFullscreen = function () {
-        Etg.enterFullscreen();
-        return Promise.resolve();
-      };
-    }
-    Etg.game = instance;
-    return instance;
+
+    var script = document.createElement("script");
+    script.src = build.loader;
+    script.onerror = function () { fail("Can't load " + build.loader); };
+    script.onload = function () {
+      createUnityInstance(canvas, {
+        dataUrl: build.data,
+        frameworkUrl: build.framework,
+        codeUrl: build.code,
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: build.companyName,
+        productName: build.productName,
+        productVersion: build.productVersion,
+        downloadProgress: files,
+        showBanner: function (msg, type) {
+          if (type === "error") fail(msg);
+          else console.warn(msg);
+        },
+      }, progress).then(function (instance) {
+        Etg.game = instance;
+        reported = 1;
+        if (cb.progress) cb.progress(1, "Ready", bytes());
+        if (cb.ready) cb.ready(instance);
+      }, function (msg) {
+        fail(String(msg));
+      });
+    };
+    document.body.appendChild(script);
+  };
+
+  /**
+   * The player's WebGL 2 context once it runs: getContext of the same type returns the context Unity made (Unity 6's
+   * Emscripten no longer sets Module.ctx). Not before Etg.game: that would make a context with other attributes.
+   */
+  Etg.gl = function () {
+    var canvas = Etg.game && Etg.game.Module && Etg.game.Module.canvas;
+    return canvas ? canvas.getContext("webgl2") : null;
   };
 
   // ------------------------------------------------------------------ frame monitor
@@ -518,7 +597,7 @@
       return;
     }
     if (!monitor) Etg.toggleFrameMonitor();
-    var gl = Etg.game && Etg.game.Module && Etg.game.Module.ctx;
+    var gl = Etg.gl();
     var names = [];
     for (var p = gl && Object.getPrototypeOf(gl); p && p !== Object.prototype; p = Object.getPrototypeOf(p)) {
       Object.getOwnPropertyNames(p).forEach(function (n) { if (names.indexOf(n) < 0) names.push(n); });
@@ -557,7 +636,7 @@
       return raf(function (time) {
         if (!monitor) return callback(time);
         var start = performance.now();
-        var gl = Etg.game && Etg.game.Module && Etg.game.Module.ctx;
+        var gl = Etg.gl();
         var query = gl && beginGpuQuery(gl);
         try {
           callback(time);
@@ -645,7 +724,7 @@
   // ?fps=profile: the breakdown too, once the game's GL context exists
   if (/[?&]fps=profile\b/.test(location.search)) {
     var waitForGame = setInterval(function () {
-      if (Etg.game && Etg.game.Module && Etg.game.Module.ctx && window.EtgAudio) {
+      if (Etg.gl() && window.EtgAudio) {
         clearInterval(waitForGame);
         Etg.toggleProfile();
       }

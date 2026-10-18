@@ -7,11 +7,18 @@ Replaces Unity's default WebGL template page.
 - `index.html`: title card with download progress (MB) and Play / Fullscreen / Export / Import;
   after Play the game fills the window and a small icon toolbar shows up in the top right corner
   while the mouse moves.
-- `etg-site.js`: pixel icons (string grids -> SVG), save export/import, fullscreen, UnityLoader
-  glue, frame monitor (F3 or `?fps`: FPS, frame / CPU / GPU time; F4 or `?fps=profile`: the CPU
+- `etg-site.js`: pixel icons (string grids -> SVG), save export/import, fullscreen, the Unity 6
+  loader glue (`createUnityInstance` on a canvas it adds to `#game`; the canvas needs an id, Unity
+  binds its input to `"#" + id`), frame monitor (F3 or `?fps`: FPS, frame / CPU / GPU time; F4 or `?fps=profile`: the CPU
   time split into WebGL calls, the audio engine, console output and the game's own code).
-- `install.py` copies the page into `webbuild/`; `EtgWebBuild.BuildPlayer` does the same after
-  every player build (menu: EtG Web -> Copy Site Page).
+- `install.py` copies the page into `webbuild6/` (or the folder given) and writes `etg-build.js`:
+  the player's file names in `Build/` (Unity 6 names them after the output folder,
+  `webbuild6.loader.js`, `.data.gz`, `.framework.js.gz`, `.wasm.gz`) and company / product / version for
+  the loader. `EtgWebBuild.BuildPlayer` does the same after every player build (menu: EtG Web -> Copy
+  Site Page).
+- `serve.py` (run by `serve-webbuild.ps1 [-Dir webbuild6]`): http.server plus `Content-Encoding: gzip`
+  / `br` and the real type (`application/wasm`) for Unity 6's pre-compressed `Build/*.gz`; without the
+  header the loader fails ("still gzip-compressed").
 
 ## Fullscreen
 
@@ -29,11 +36,11 @@ go through the page instead. The game's Options -> Windowed still works (Unity c
 
 ## Saves
 
-Unity 2017 keeps `persistentDataPath` in IndexedDB: database `/idbfs`, store `FILE_DATA`, key =
+Unity (2017.4 and 6.6, checked on a 6.6 probe build) keeps `persistentDataPath` in IndexedDB: database `/idbfs`, store `FILE_DATA`, key =
 full path, value `{timestamp, mode, contents}`. The folder is `/idbfs/<md5 of the page's folder
-URL without the trailing "/">` (e.g. md5("http://localhost:8080")), so every page in one folder
-shares saves, but another host/port is another origin with its own saves. The same folder holds
-Unity's asset-bundle cache (~70 MB), so export takes only `SlotX.save/.options/.backup.*` and
+URL without the trailing "/">` (e.g. md5("http://localhost:8080"); Unity 6's loader has no MD5, so
+`etg-site.js` brings its own), so every page in one folder shares saves (old 2017.4 saves stay found), but another host/port is another origin with its own saves. The same folder held 2017.4's
+asset-bundle cache (~70 MB), so export takes only `SlotX.save/.options/.backup.*` and
 `PlayerPrefs`, as a store-only zip. Import takes those files or zips of them (deflate via
 `DecompressionStream`; a zipped Steam save folder works, `steam_autocloud.vdf` is skipped),
 writes them straight into IndexedDB and reloads the page: the running game keeps its own copy in
@@ -41,6 +48,6 @@ memory and its next `FS.syncfs` would overwrite or delete the imported files.
 
 ## Gotcha
 
-The player rewrites the canvas' inline style once it runs (drops UnityLoader's `width:100%`), so
+The player rewrites the canvas' inline style once it runs (2017.4 dropped UnityLoader's `width:100%`), so
 `etg-site.css` forces `.game canvas` to 100% with `!important`; otherwise after a resize or
 fullscreen the canvas no longer follows the container and the game renders into a stale corner.

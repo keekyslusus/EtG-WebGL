@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -318,6 +320,43 @@ public static class EtgWebBuild
         {
             File.Copy(file, Path.Combine(assets, Path.GetFileName(file)), true);
         }
+        WriteBuildInfo(output);
         Debug.Log("[EtG Web] Site page copied from " + site);
+    }
+
+    // etg-build.js: the player's file names for the page (Unity 6 names them after the output folder, e.g.
+    // Build/webbuild6.loader.js, .data.gz) and the names createUnityInstance wants. port/site/install.py writes the same.
+    private static readonly string[][] BuildFileKinds =
+    {
+        new[] { "loader", @"\.loader\.js$" },
+        new[] { "framework", @"\.framework\.js(\.\w+)?$" },
+        new[] { "data", @"\.data(\.\w+)?$" },
+        new[] { "code", @"\.wasm(\.\w+)?$" },
+    };
+
+    private static void WriteBuildInfo(string output)
+    {
+        string[] names = Array.ConvertAll(Directory.GetFiles(Path.Combine(output, "Build")), f => Path.GetFileName(f));
+        Array.Sort(names, StringComparer.Ordinal);
+        StringBuilder js = new StringBuilder("// Written by EtgWebBuild.CopySite / port/site/install.py: the player's files in Build/.\n");
+        js.Append("window.EtgBuild = {\n");
+        foreach (string[] kind in BuildFileKinds)
+        {
+            string[] found = Array.FindAll(names, n => Regex.IsMatch(n, kind[1]));
+            if (found.Length != 1)
+            {
+                throw new Exception("[EtG Web] Build/ in " + output + ": expected one " + kind[0] + " file, found " + found.Length);
+            }
+            js.Append("  \"").Append(kind[0]).Append("\": \"Build/").Append(found[0]).Append("\",\n");
+        }
+        js.Append("  \"companyName\": ").Append(JsString(PlayerSettings.companyName)).Append(",\n");
+        js.Append("  \"productName\": ").Append(JsString(PlayerSettings.productName)).Append(",\n");
+        js.Append("  \"productVersion\": ").Append(JsString(PlayerSettings.bundleVersion)).Append("\n};\n");
+        File.WriteAllText(Path.Combine(output, "etg-build.js"), js.ToString(), new UTF8Encoding(false));
+    }
+
+    private static string JsString(string s)
+    {
+        return "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
     }
 }

@@ -50,15 +50,15 @@ button:disabled {
   flex: none;
 }
 
-/* The Unity container; UnityLoader puts a 100%x100% canvas in it. */
+/* The Unity container; Etg.startGame puts the player's canvas in it. */
 .game {
   position: absolute;
   background: #000;
 }
 
-/* UnityLoader sets the canvas to 100% inline, but the player rewrites its inline style once it
-   runs; without this the canvas stops following the container (resize, fullscreen) and the game
-   renders into a stale corner. Unity reads clientWidth/Height every frame and resizes to match. */
+/* The player rewrites the canvas' inline style once it runs (Unity 2017.4 dropped its width:100%); without this
+   the canvas stops following the container (resize, fullscreen) and the game renders into a stale corner.
+   Unity reads clientWidth/Height every frame and resizes to match (matchWebGLToCanvasSize). */
 .game canvas {
   display: block;
   width: 100% !important;
