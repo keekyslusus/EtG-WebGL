@@ -1,4 +1,4 @@
-"""Post-processes USCSandbox output so it compiles for WebGL 2 (gles3) in Unity 2017.4.
+"""Post-processes USCSandbox output so it compiles for WebGL 2 (gles3) in Unity 6.6 (found on Unity 2017.4).
 
 Usage: python fix_shaders.py <dir with decompiled .shader files>   (edits files in place)
 The result is meant to be right on both D3D11 and GLES: GLES-specific rewrites sit under #if on the platform.
@@ -6,7 +6,8 @@ The result is meant to be right on both D3D11 and GLES: GLES-specific rewrites s
 Fixes, all found by importing the decompiled shaders into Unity:
   * Light Probe Proxy Volume uniforms: the DX11 variants reference unity_ProbeVolume*, which
     UnityShaderVariables.cginc only declares when UNITY_LIGHT_PROBE_PROXY_VOLUME is 1 (never on
-    gles3). Declared here under the inverse condition; on WebGL they stay 0 = feature disabled.
+    gles3 in 2017.4). Declared here under the inverse condition; on WebGL they stay 0 = feature disabled. Unity 6.6
+    defines UNITY_LIGHT_PROBE_PROXY_VOLUME for WebGL (EtgAbTest's webglDefines), so there this is inactive.
   * Meta pass uniforms (unity_MetaVertexControl & co.) come from UnityMetaPass.cginc, which the
     decompiled code doesn't include. Meta passes are only used for lightmap baking.
   * Loop counters: USCSandbox emits `i` (compared, incremented with `i = i + 1.0`) but never
@@ -16,7 +17,8 @@ Fixes, all found by importing the decompiled shaders into Unity:
   * sign() on DXBC comparison masks (true = -1) came out negated: "b - a" of two raw comparisons
     is swapped back. It made every Pixelator light subtract.
   * Baked occlusion: saturate(dot(1111, unity_OcclusionMaskSelector)) from the LPPV DX11 variants is 1.0
-    without LPPV (gles3; the engine leaves the selector at zero there); it zeroed every Unity light.
+    without LPPV (gles3 in 2017.4; the engine leaves the selector at zero there); it zeroed every Unity light.
+    Inactive with 6.6's LPPV on WebGL, where the original code is right (abtest: lit renders equal D3D11).
   * Built-in tags come back upper-cased ("LIGHTMODE"="FORWARDADD"); Unity does not recognise those LightMode
     values when compiling from source, so no Unity light ever lit a sprite. Restored to Unity spelling.
   * Light attenuation textures (_LightTexture0/B0) are read from .x as on D3D11; on GLES Unity stores them
@@ -24,6 +26,8 @@ Fixes, all found by importing the decompiled shaders into Unity:
   * D3D renders into textures with a flipped projection; screen positions the game derives from the clip position
     are computed in D3D's clip space on GLES (title screen water was upside down).
   * ShadowCaster passes: D3D's reversed-Z shadow bias gets the GL variant on GLES.
+  * "ZTest Unknown": a pass with the depth test disabled (CompareFunction.Disabled, 0) has no ShaderLab spelling;
+    Unity 6.6 fails the whole shader on it (Brave/CameraEffects/DepthToColor). Disabled = Always.
   * Single-shader decompiler slips, patched by exact text.
 """
 import re
@@ -337,11 +341,19 @@ def fix_shadow_bias(text: str) -> str:
         f"{m.group(1)}#endif"), text)
 
 
+ZTEST_UNKNOWN_RE = re.compile(r"^(\s*ZTest) Unknown\b", re.M)
+
+
+def fix_ztest_unknown(text: str) -> str:
+    return ZTEST_UNKNOWN_RE.sub(r"\1 Always", text)
+
+
 def fix_shader(text: str) -> str:
     # The DX11-vs-GLES rewrites (attenuation channel, baked occlusion, clip space flip, shadow bias) are all under
     # #if/macros on the platform, no-ops on D3D11: shaderdiff.sh checks they don't change the DX11 result, and the
     # same files are right in the editor on D3D11 and GLES (port/abtest.sh compares the two).
     text = fix_tag_case(text)  # idempotent on its own
+    text = fix_ztest_unknown(text)  # idempotent on its own
     already_fixed = MARK in text
     text = fix_occlusion_selector(text)  # idempotent on its own, also for previously fixed files
     text = fix_builtin_keywords(text)  # idempotent on its own, also for previously fixed files

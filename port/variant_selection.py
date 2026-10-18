@@ -36,6 +36,22 @@ def read(path):
     return Path(path).read_text(encoding="utf-8-sig")
 
 
+KEYWORD_LIST_RE = re.compile(r"^([ \t]*)m_(?:Valid|Invalid)Keywords:[ \t]*(\[\])?[ \t]*\r?\n((?:\1- [^\r\n]*\r?\n)*)", re.M)
+
+
+def material_keywords(text):
+    """A material's keywords: Unity 2017.4's m_ShaderKeywords string, or the m_ValidKeywords + m_InvalidKeywords
+    lists Unity 6 writes when it re-saves a material (together they are the old string)."""
+    keywords = set()
+    # Do not let \s* consume the next YAML field for an empty keyword list.
+    kw = re.search(r"^[ \t]*m_ShaderKeywords:[ \t]*([^\r\n]*)", text, re.M)
+    if kw:
+        keywords.update(kw[1].strip('"').split())
+    for m in KEYWORD_LIST_RE.finditer(text):
+        keywords.update(line.strip()[2:].strip() for line in m[3].splitlines() if line.strip())
+    return keywords
+
+
 def write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
@@ -355,9 +371,7 @@ def scan(project, dump, filter_re):
         shader = shaders.get(ref[2]) if ref else None
         if filter_re and not re.search(filter_re, asset + " " + (shader["name"] if shader else ""), re.I):
             continue
-        # Do not let \s* consume the next YAML field for an empty keyword list.
-        kw = re.search(r"^[ \t]*m_ShaderKeywords:[ \t]*([^\r\n]*)", text, re.M)
-        materials.append(dict(path=asset, keywords=set(kw[1].strip('"').split()) if kw else set(), shader=shader))
+        materials.append(dict(path=asset, keywords=material_keywords(text), shader=shader))
         if not shader:
             unchecked.append(dict(material=asset, reason="builtin/unresolved shader reference " + (ref[0] if ref else "null")))
     return shaders, materials, unchecked

@@ -37,7 +37,7 @@ public static class EtgWebDebug
         sb.AppendLine("Quality: " + QualitySettings.names[QualitySettings.GetQualityLevel()] + " pixelLights=" + QualitySettings.pixelLightCount +
                       " colorSpace=" + QualitySettings.activeColorSpace + " gfx=" + SystemInfo.graphicsDeviceType);
 
-        Light[] lights = UnityEngine.Object.FindObjectsOfType<Light>();
+        Light[] lights = UnityEngine.Object.FindObjectsByType<Light>();
         Dictionary<string, int> lightTypes = new Dictionary<string, int>();
         foreach (Light l in lights)
         {
@@ -77,7 +77,7 @@ public static class EtgWebDebug
 
         // Shaders in use by visible renderers, with unsupported ones flagged.
         Dictionary<Shader, int> shaders = new Dictionary<Shader, int>();
-        foreach (Renderer r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+        foreach (Renderer r in UnityEngine.Object.FindObjectsByType<Renderer>())
         {
             if (!r.isVisible)
             {
@@ -127,7 +127,7 @@ public static class EtgWebDebug
             s_hiddenLights.Clear();
             return;
         }
-        foreach (Light l in UnityEngine.Object.FindObjectsOfType<Light>())
+        foreach (Light l in UnityEngine.Object.FindObjectsByType<Light>())
         {
             if (l.enabled)
             {
@@ -144,7 +144,7 @@ public static class EtgWebDebug
     public static void MakeLightsRealtime()
     {
         int n = 0;
-        foreach (Light l in UnityEngine.Object.FindObjectsOfType<Light>())
+        foreach (Light l in UnityEngine.Object.FindObjectsByType<Light>())
         {
             LightBakingOutput o = l.bakingOutput;
             o.isBaked = false;
@@ -200,7 +200,7 @@ public static class EtgWebDebug
     {
         s_shadowQuadsHidden = !s_shadowQuadsHidden;
         int n = 0;
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb != null && mb.GetType().Name == "ShadowSystem" && mb.GetComponent<Renderer>() != null)
             {
@@ -224,7 +224,7 @@ public static class EtgWebDebug
         Vector3 centre = cam.ViewportToWorldPoint(new Vector3(0.5f, 0.5f, 0f));
         StringBuilder sb = new StringBuilder("[EtG Debug] ==== Renderers at screen centre " + centre + " ====\n");
         List<Renderer> hits = new List<Renderer>();
-        foreach (Renderer r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+        foreach (Renderer r in UnityEngine.Object.FindObjectsByType<Renderer>())
         {
             Bounds b = r.bounds;
             if (r.enabled && r.gameObject.activeInHierarchy && centre.x >= b.min.x && centre.x <= b.max.x && centre.y >= b.min.y && centre.y <= b.max.y)
@@ -293,7 +293,7 @@ public static class EtgWebDebug
     {
         List<KeyValuePair<float, string>> rows = new List<KeyValuePair<float, string>>();
         HashSet<Material> seen = new HashSet<Material>();
-        foreach (Renderer r in UnityEngine.Object.FindObjectsOfType<Renderer>())
+        foreach (Renderer r in UnityEngine.Object.FindObjectsByType<Renderer>())
         {
             if (!r.isVisible || !r.enabled)
             {
@@ -307,21 +307,21 @@ public static class EtgWebDebug
                 }
                 float max = 0f;
                 StringBuilder props = new StringBuilder();
-                for (int i = 0; i < ShaderUtil.GetPropertyCount(m.shader); i++)
+                for (int i = 0; i < m.shader.GetPropertyCount(); i++)
                 {
-                    string name = ShaderUtil.GetPropertyName(m.shader, i);
+                    string name = m.shader.GetPropertyName(i);
                     if (!BrightProperty.IsMatch(name))
                     {
                         continue;
                     }
-                    ShaderUtil.ShaderPropertyType type = ShaderUtil.GetPropertyType(m.shader, i);
-                    if (type == ShaderUtil.ShaderPropertyType.Float || type == ShaderUtil.ShaderPropertyType.Range)
+                    ShaderPropertyType type = m.shader.GetPropertyType(i);
+                    if (type == ShaderPropertyType.Float || type == ShaderPropertyType.Range)
                     {
                         float v = m.GetFloat(name);
                         max = Mathf.Max(max, Mathf.Abs(v));
                         props.Append(name + "=" + v + " ");
                     }
-                    else if (type == ShaderUtil.ShaderPropertyType.Color)
+                    else if (type == ShaderPropertyType.Color)
                     {
                         Color c = m.GetColor(name);
                         max = Mathf.Max(max, Mathf.Max(c.r, Mathf.Max(c.g, c.b)));
@@ -361,7 +361,7 @@ public static class EtgWebDebug
 
     private static void ToggleField(string typeName, string fieldName)
     {
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb == null || mb.GetType().Name != typeName)
             {
@@ -380,7 +380,7 @@ public static class EtgWebDebug
     {
         int n = 0;
         bool value = false;
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb != null && mb.GetType().Name == typeName)
             {
@@ -399,7 +399,7 @@ public static class EtgWebDebug
         Camera cam = Camera.main;
         MonoBehaviour best = null;
         float bestDistance = float.MaxValue;
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb == null || mb.GetType().Name != "ShadowSystem" || !mb.isActiveAndEnabled || cam == null)
             {
@@ -468,7 +468,7 @@ public static class EtgWebDebug
     {
         Camera cam = Camera.main;
         int shown = 0, total = 0;
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb == null || mb.GetType().Name != typeName || !mb.isActiveAndEnabled)
             {
@@ -518,7 +518,7 @@ public static class EtgWebDebug
     // live in EtgGame.dll, which editor code can't reference directly).
     private static void DumpComponentFields(StringBuilder sb, string typeName)
     {
-        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsOfType<MonoBehaviour>())
+        foreach (MonoBehaviour mb in UnityEngine.Object.FindObjectsByType<MonoBehaviour>())
         {
             if (mb == null || mb.GetType().Name != typeName)
             {

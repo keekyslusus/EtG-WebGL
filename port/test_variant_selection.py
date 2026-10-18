@@ -90,6 +90,13 @@ ENDCG
         self.assertIn("ColorMask 0", source)
         self.assertIn("POINT", keys)
 
+    def test_material_keywords_both_formats(self):
+        self.assertEqual(audit.material_keywords("  m_ShaderKeywords: A_ON B_OFF\n  m_LightmapFlags: 4\n"), {"A_ON", "B_OFF"})
+        unity6 = ("  m_ValidKeywords:\n  - A_ON\n  - B_OFF\n  m_InvalidKeywords:\n  - _UNUSED\n"
+                  "  m_LightmapFlags: 5\n")
+        self.assertEqual(audit.material_keywords(unity6), {"A_ON", "B_OFF", "_UNUSED"})
+        self.assertEqual(audit.material_keywords("  m_ValidKeywords: []\n  m_InvalidKeywords: []\n  m_Flags: 1\n"), set())
+
     def test_unsupported_pragmas_fail_closed(self):
         with self.assertRaisesRegex(ValueError, "Unsupported pragma"):
             audit.pragma_groups("#pragma multi_compile_fwdbase\n")

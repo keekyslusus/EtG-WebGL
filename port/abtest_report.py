@@ -105,10 +105,10 @@ def small_blob_share(mask, small=16):
 
 
 def shader_sources(directory: Path):
-    """shader name -> decompiled source text (for annotations)"""
+    """shader name -> source text (for annotations)"""
     out = {}
     for f in directory.rglob("*.shader") if directory.is_dir() else []:
-        text = f.read_text(encoding="utf-8", errors="replace")
+        text = f.read_text(encoding="utf-8-sig", errors="replace")
         if text.startswith('Shader "'):
             out[text[8:text.index('"', 8)]] = text
     return out
@@ -145,10 +145,16 @@ def main():
     ap.add_argument("--b", default="gles30")
     ap.add_argument("--tol", type=int, default=4)
     ap.add_argument("--min-frac", type=float, default=0.002)
-    ap.add_argument("--shaders", help="decompiled shaders (default: <etg>/tools/uscs/out)")
+    ap.add_argument("--shaders", help="shader sources (default: <etg>/tools/uscs/out, then the Unity 6.6 project's Assets: "
+                                      "mods' shaders are compiled from source)")
     args = ap.parse_args()
     root = Path(args.root)
-    sources = shader_sources(Path(args.shaders) if args.shaders else root.resolve().parents[2] / "tools" / "uscs" / "out")
+    if args.shaders:
+        sources = shader_sources(Path(args.shaders))
+    else:
+        etg = root.resolve().parents[2]
+        sources = shader_sources(etg / "ripped" / "Unity6Project" / "Assets")
+        sources.update(shader_sources(etg / "tools" / "uscs" / "out"))  # the decompiled text wins
     A, B = load_run(root, args.a), load_run(root, args.b)
     if A is None or B is None:
         sys.exit(f"need {root / args.a}/manifest.jsonl and {root / args.b}/manifest.jsonl")
@@ -302,8 +308,8 @@ def write_html(root, A, B, args, by_cls, determinism, results):
     for run in (A, B):
         env = run["env"]
         h.append(f"<tr><th>{e(run['name'])}</th><td>{e(env.get('device', '?'))} · {e(env.get('deviceVersion', ''))} · "
-                 f"shader level {e(str(env.get('shaderLevel', '')))} · {e(str(env.get('tier', '')))} · emulation "
-                 f"{e(str(env.get('emulation', '')))} · {e(env.get('started', ''))}</td></tr>")
+                 f"shader level {e(str(env.get('shaderLevel', '')))} · {e(str(env.get('tier', '')))} · "
+                 f"{e(env.get('started', ''))}</td></tr>")
     h.append("</table>")
     h.append(f"<p class='muted'>A pixel differs when a channel differs by more than {args.tol}/255; an entry "
              f"<b>differs</b> above {args.min_frac * 100:.2f}% of its pixels, below that it is <b>minor</b>. Sorted by "

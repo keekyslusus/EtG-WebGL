@@ -36,7 +36,12 @@ GLES, D3D11 again as the noise floor) takes ~2 minutes. Report: `port/build/abte
   pixels), `failed`, `empty` (background on both APIs, not verified).
 - Probes (`AbTestProbe.shader`, `AbTestLightProbe.shader`) dump built-in uniforms and forward light data per API: only
   the expected cells differ (`_ProjectionParams.x`, `_ZBufferParams`, clip space, platform defines).
-- Both runs use the WebGL 2.0 graphics emulation Play From Boot sets (`--emulation none` to compare without).
+- Unity 6 has no graphics emulation (2017.4 ran both under "WebGL 2.0"): GLES uses the desktop GPU's caps, shader
+  level 46 against WebGL 2's 35, so a SubShader or `#pragma target` above 3.5 can be picked here and not in the
+  browser. `environment.json` records the WebGL player's built-in defines (`webglDefines`; in 6.6 they include
+  `UNITY_LIGHT_PROBE_PROXY_VOLUME`, so fix_shaders.py's LPPV / baked-occlusion rewrites are inactive in the player).
+- `apply.sh` runs without `--mods`; `--no-apply` keeps a modded project (mod shaders are compiled from source, the
+  report reads their `.shader` files too).
 - What is left is precision: PitSpirits/HologramShader (the sin hash feeding `round`/`ceil` dithering) and speckle.
   Not covered: real game frames (Pixelator, post effects), targets other than ARGB32, shadows, 75 materials that draw
   nothing in isolation.
@@ -58,10 +63,12 @@ python -m unittest discover -s port -p test_variant_selection.py
 - Output in `port/build/variant-selection/`: `report.md`, `summary.json`, `issues.json` (by shader and reason), the rows
   (`static.jsonl`, `combinations.jsonl`, `empirical.jsonl`), `engine-coverage.json`, `stripping.json`, `unchecked.json`,
   `editor.log`. IDs are one-based indices into variants.json.
+- Material keywords: 2017.4's `m_ShaderKeywords` or Unity 6's `m_ValidKeywords` + `m_InvalidKeywords` (Unity 6
+  rewrites a material in that form when it saves it).
 - Static: every `multi_compile`/`shader_feature` combination, shaders without materials included, must map to an exact
   original per stage. Default choices (the first option) are explicit assumptions; conflicts, missing originals and
   duplicate keyword sets are reported separately, never replaced by a nearest-variant guess.
-- Empirical: `EtgVariantSelection.cs` renders diagnostic copies on D3D11 (no emulation, float target) whose branches
+- Empirical: `EtgVariantSelection.cs` renders diagnostic copies on D3D11 (float target) whose branches
   output their IDs and keyword bitsets; bodies and render state are replaced so nothing can hide the result. Setups:
   dark, directional, point, spot, each cookie, ForceVertex, SH, an attempted directional shadow. Engine keywords are
   recorded by an independent reference shader. Temporary assets go to `Assets/Editor/EtgWebBuild/_variants` (removed

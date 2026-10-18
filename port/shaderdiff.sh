@@ -13,7 +13,7 @@ PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
 DUMP="$ROOT/tools/uscs/dump"
 OUT="$PORT/build/shaderdiff-report"   # not build/shaderdiff: same dir as build/ShaderDiff on Windows
-CGINC="C:/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Data/CGIncludes"
+CGINC="${CGINC:-C:/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Data/Resources/CGIncludes}"
 
 [ -d "$DUMP" ] && [ -n "$(ls -A "$DUMP")" ] || { echo "no $DUMP - run port/decompile_shaders.sh first"; exit 1; }
 log=$(dotnet build "$PORT/ShaderDiff" -c Release -o "$PORT/build/ShaderDiff" -v q --nologo 2>&1) || { echo "$log"; exit 1; }

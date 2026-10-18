@@ -58,7 +58,6 @@ public static class EtgVariantSelection
                 unity = Application.unityVersion, api = SystemInfo.graphicsDeviceVersion,
                 colorSpace = QualitySettings.activeColorSpace.ToString(), jobs = input.jobs.Length
             }, true));
-            EditorApplication.ExecuteMenuItem("Edit/Graphics Emulation/No Emulation");
             BuildStage();
             Dictionary<string, Material> materials = new Dictionary<string, Material>();
             Dictionary<string, string[]> engineCache = new Dictionary<string, string[]>();

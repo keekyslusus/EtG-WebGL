@@ -35,7 +35,7 @@ public static class ShaderText
     }
 }
 
-/// <summary>Compiles decompiled CG the way Unity 2017.4 does for d3d11: HLSLSupport.cginc and
+/// <summary>Compiles decompiled CG the way Unity does for d3d11: HLSLSupport.cginc and
 /// UnityShaderVariables.cginc auto-included, platform defines, the variant's keywords defined to 1.</summary>
 public sealed class HlslCompiler(string cgIncludes)
 {

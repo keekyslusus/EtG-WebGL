@@ -10,8 +10,9 @@
 #   bash port/abtest.sh --no-apply --no-repeat  # project already up to date, skip the determinism run
 #   bash port/abtest.sh --filter Water          # a subset (regex on the asset path)
 #   bash port/abtest.sh --report-only           # just rebuild the report from existing renders
-# Other options: --runs "d3d11 gles30 gles30" (an API twice -> <api>.2), --emulation none, --tol N, --min-frac F,
+# Other options: --runs "d3d11 gles30 gles30" (an API twice -> <api>.2), --tol N, --min-frac F,
 #   --out DIR (default port/build/abtest)
+# apply.sh runs without --mods (the vanilla game's materials); --no-apply keeps a --mods project as it is.
 set -euo pipefail
 
 PORT="$(cd "$(dirname "$0")" && pwd)"
@@ -27,7 +28,6 @@ while [ $# -gt 0 ]; do
         --no-repeat) runs="d3d11 gles30" ;;
         --runs) runs="$2"; shift ;;
         --filter) unity_args+=(-abFilter "$2"); shift ;;
-        --emulation) unity_args+=(-abEmulation "$2"); shift ;;
         --tol|--min-frac) report_args+=("$1" "$2"); shift ;;
         --out) OUT="$(cd "$(dirname "$2")" && pwd)/$(basename "$2")"; shift ;;
         --report-only) report_only=1 ;;

@@ -13,8 +13,10 @@ using UnityEngine.Rendering;
 // Draws the same frames on whatever API the editor runs on and writes PNGs + manifest.jsonl: every material in
 // the project (and every shader without one) on a quad, rendered into a RenderTexture by a camera, with a few
 // lighting setups (gallery/).
-// Command line: -executeMethod EtgAbTest.Run -abOut <dir> -abApi d3d11|gles30
-//               [-abFilter <regex on asset path>] [-abEmulation webgl2|none]
+// Command line: -executeMethod EtgAbTest.Run -abOut <dir> -abApi d3d11|gles30 [-abFilter <regex on asset path>]
+// Unity 6 has no Graphics Emulation (2017.4 ran this under "WebGL 2.0"): GLES runs with the device's own caps
+// (shader level 46 on a desktop GPU against WebGL 2's 35), so a SubShader / #pragma target above 3.5 can be picked
+// here and not in the browser.
 // Same C# 4 restrictions as EtgWebBuild.cs. The game's types are reached by reflection, like EtgWebDebug.
 public static class EtgAbTest
 {
@@ -45,13 +47,7 @@ public static class EtgAbTest
             GraphicsDeviceType expected = api == "d3d11" ? GraphicsDeviceType.Direct3D11
                 : api == "gles30" ? GraphicsDeviceType.OpenGLES3 : GraphicsDeviceType.Null;
 
-            string emulation = Arg("-abEmulation", "webgl2");
-            bool emulated = emulation == "none" || EditorApplication.ExecuteMenuItem("Edit/Graphics Emulation/WebGL 2.0");
-            if (emulation == "none")
-            {
-                EditorApplication.ExecuteMenuItem("Edit/Graphics Emulation/No Emulation");
-            }
-            WriteEnvironment(api, emulation, emulated);
+            WriteEnvironment(api);
             if (SystemInfo.graphicsDeviceType != expected)
             {
                 Debug.LogError("[AbTest] graphics API is " + SystemInfo.graphicsDeviceType + ", expected " + expected + " (-abApi " + api + ")");
@@ -82,7 +78,7 @@ public static class EtgAbTest
         return fallback;
     }
 
-    private static void WriteEnvironment(string api, string emulation, bool emulated)
+    private static void WriteEnvironment(string api)
     {
         StringBuilder sb = new StringBuilder("{");
         Json(sb, "api", api); sb.Append(',');
@@ -91,13 +87,38 @@ public static class EtgAbTest
         Json(sb, "deviceName", SystemInfo.graphicsDeviceName); sb.Append(',');
         Json(sb, "shaderLevel", SystemInfo.graphicsShaderLevel.ToString()); sb.Append(',');
         Json(sb, "tier", Graphics.activeTier.ToString()); sb.Append(',');
-        Json(sb, "emulation", emulation + (emulated ? "" : " (menu item not found)")); sb.Append(',');
         Json(sb, "unity", Application.unityVersion); sb.Append(',');
         Json(sb, "colorSpace", QualitySettings.activeColorSpace.ToString()); sb.Append(',');
+        Json(sb, "webglDefines", WebGLShaderDefines()); sb.Append(',');
         Json(sb, "started", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
         sb.Append("}\n");
         File.WriteAllText(Path.Combine(outDir, "environment.json"), sb.ToString());
         Debug.Log("[AbTest] " + sb);
+    }
+
+    // The engine's built-in defines for the WebGL player's shaders (Unity 6: UNITY_LIGHT_PROBE_PROXY_VOLUME & co. come
+    // from here, not from a list of APIs in UnityShaderVariables.cginc); the editor's own GLES device may differ.
+    public static string WebGLShaderDefines()
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (GraphicsTier tier in new[] { GraphicsTier.Tier1, GraphicsTier.Tier2, GraphicsTier.Tier3 })
+        {
+            BuiltinShaderDefine[] defines = ShaderUtil.GetShaderPlatformKeywordsForBuildTarget(
+                UnityEditor.Rendering.ShaderCompilerPlatform.GLES3x, BuildTarget.WebGL, tier);
+            sb.Append(sb.Length > 0 ? "; " : "").Append(tier).Append(':');
+            foreach (BuiltinShaderDefine d in defines)
+            {
+                sb.Append(' ').Append(d);
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>-executeMethod EtgAbTest.LogWebGLShaderDefines: just the defines, into the editor log.</summary>
+    public static void LogWebGLShaderDefines()
+    {
+        Debug.Log("[AbTest] WebGL shader defines: " + WebGLShaderDefines());
+        EditorApplication.Exit(0);
     }
 
     // ---------------------------------------------------------------- manifest
@@ -351,13 +372,13 @@ public static class EtgAbTest
     {
         List<string> filled = new List<string>();
         Shader shader = mat.shader;
-        int n = ShaderUtil.GetPropertyCount(shader);
+        int n = shader.GetPropertyCount();
         for (int i = 0; i < n; i++)
         {
-            if (ShaderUtil.GetPropertyType(shader, i) == ShaderUtil.ShaderPropertyType.TexEnv)
+            if (shader.GetPropertyType(i) == ShaderPropertyType.Texture)
             {
-                string name = ShaderUtil.GetPropertyName(shader, i);
-                if (mat.GetTexture(name) == null && ShaderUtil.GetTexDim(shader, i) == TextureDimension.Tex2D)
+                string name = shader.GetPropertyName(i);
+                if (mat.GetTexture(name) == null && shader.GetPropertyTextureDimension(i) == TextureDimension.Tex2D)
                 {
                     mat.SetTexture(name, noise);
                     filled.Add(name + "=noise");
@@ -424,10 +445,10 @@ public static class EtgAbTest
         string text = File.ReadAllText(path);
         info.Lit = Regex.IsMatch(text, "\"LightMode\"\\s*=\\s*\"(ForwardBase|ForwardAdd|Vertex|VertexLM|VertexLMRGBM)\"", RegexOptions.IgnoreCase);
         HashSet<string> declared = new HashSet<string>();
-        int n = ShaderUtil.GetPropertyCount(shader);
+        int n = shader.GetPropertyCount();
         for (int i = 0; i < n; i++)
         {
-            declared.Add(ShaderUtil.GetPropertyName(shader, i));
+            declared.Add(shader.GetPropertyName(i));
         }
         foreach (Match g in Regex.Matches(text, "GrabPass\\s*\\{\\s*\"(\\w+)\""))
         {
@@ -638,7 +659,7 @@ public static class EtgAbTest
                 ClearLights();
                 Light d = AddLight("DirectionalCookie", LightType.Directional, new Color(0.9f, 1f, 0.8f), 0.8f, Vector3.zero, new Vector3(20f, 10f, 0f));
                 d.cookie = cookie;
-                d.cookieSize = 0.6f;
+                d.cookieSize2D = new Vector2(0.6f, 0.6f);
                 Light p = AddLight("PointCookie", LightType.Point, new Color(1f, 0.8f, 0.5f), 1.5f, new Vector3(-0.2f, 0.25f, -0.5f), new Vector3(0f, 30f, 0f));
                 p.cookie = cubeCookie;
                 Light s = AddLight("SpotCookie", LightType.Spot, new Color(0.5f, 1f, 0.6f), 2f, new Vector3(0.3f, -0.3f, -1.2f), new Vector3(10f, -15f, 0f));
