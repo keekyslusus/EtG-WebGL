@@ -4,15 +4,9 @@
 плеера — `webbuild6/`. `ripped/ExportedProject` и `webbuild/` остаются рабочей 2017.4-сборкой `master` до конца
 переезда. Уже работает: патчер и `verify` (All references resolve), чистый импорт с модами без ошибок, Play From Boot,
 полный `modsmoke.sh`, шейдеры (`abtest.sh` GLES = D3D11 как на 2017.4, `shaderdiff.sh` на
-CGIncludes 6.6 — 3068/3068).
+CGIncludes 6.6 — 3068/3068), бандлы (EtG Web → 3, данные FullInspector как в 2017.4: `bundle_ficheck.py`).
 
-## 1. Бандлы
-
-EtG Web → 3 (`BuildBundles`) в 6.6. В spike бандлы собрались без ошибок шейдеров, но со сломанным FullInspector;
-теперь он исправлен (`EtgFullInspector.cs`, `UnityNull`) — проверить, что данные FullInspector в бандлах целы
-(например, `BossStatues`: 8 ссылок, `levelData`).
-
-## 2. Страница и упаковка
+## 1. Страница и упаковка
 
 - `port/site`: загрузчик 2017.4 (`UnityLoader.instantiate`, `Build/webbuild.json`, `UnityLoader.SystemInfo`,
   `buildDownloadProgress`, `UnityLoader.Cryptography.md5`) → `createUnityInstance(canvas, config, onProgress)` и
@@ -24,7 +18,7 @@ EtG Web → 3 (`BuildBundles`) в 6.6. В spike бандлы собрались 
 - `ModBaker resources`: кладёт ли 6.6 `*-resources.dat` в WebGL-сборку сам (2017.4 терял их). Нужен ли ещё
   `AccessFixer`.
 
-## 3. Первая dev-сборка и проверка в браузере
+## 2. Первая dev-сборка и проверка в браузере
 
 - `bash port/webbuild.sh --mods` → `webbuild6/` (куча 512 → 4096 МБ, wasm32).
 - jslib под Emscripten 4 (`UTF8ToString`, `__sig`, `ptrToIdx`) в браузере ещё не проверен: звук, геймпад,
@@ -40,7 +34,7 @@ EtG Web → 3 (`BuildBundles`) в 6.6. В spike бандлы собрались 
 - Производительность против 2017.4: в 6.6 нет динамического батчинга (по замеру на 2017.4 он экономил 12–16 % draw
   calls, оценка +0,4–0,8 мс на кадр).
 
-## 4. Завершение
+## 3. Завершение
 
 - `webbuild6/` → `webbuild/`, `Unity6Project` — основной проект; README «Building» под 6.6.
 - Убрать хаки 2017.4: `setstack.py`, `patch_webgl_dedupe.py`, `patch_webgl_noasm.py`, `tools/unity-2017.4.27f1`,

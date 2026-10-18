@@ -138,6 +138,17 @@ same files are right on D3D11 and GLES:
 - Reversed Z: the ShadowCaster passes have D3D's `UnityApplyLinearShadowBias` baked in, GLES gets the GL version
   (`fix_shadow_bias`). The soft particles read depth through `_ZBufferParams` and need nothing.
 
+## Bundles (EtG Web -> 3)
+
+`EtgWebBuild.BuildBundles` builds the 33 WebGL bundles into `Assets/StreamingAssets/Assets` (Unity 6.6 batchmode:
+`-executeMethod EtgWebBuild.BuildBundles`, ~4.5 min). `python -I port/bundle_ficheck.py <old dir> <new dir>` compares
+the FullInspector state of every MonoBehaviour bundle by bundle (keys, values, object references set), e.g. 2017.4's
+`webbuild/StreamingAssets/Assets` against a new build: Unity 6's prefab import once wiped it silently (BossStatues lost
+`levelData`; fixed in `EtgFullInspector.cs`). Unity 6.6 vs 2017.4: 280 objects, one differs -
+`MetalCubeGuy_TrapVersion`'s `primeAnim` is `null` as in the Steam data (2017.4's import had re-saved the field
+default `"attack_tell"`). Expected noise of the build: Foyer scenes lose a `GUILayer` (removed in Unity 6) on some
+lights, and `AkInitializer.Awake` (ExecuteInEditMode) throws on `DontDestroyOnLoad`.
+
 ## Sound
 
 Wwise is a native Windows library, so the browser gets `port/audio/etg-audio.js`, a small Wwise-like engine on Web Audio
