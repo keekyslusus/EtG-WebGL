@@ -3,20 +3,23 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.Build;
+using UnityEditor.Build.Reporting;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-// Unity 2017.4 with the legacy (.NET 3.5) scripting runtime compiles this with C# 4:
-// no string interpolation, no expression-bodied members, no ?. operator.
+// Written for Unity 2017.4's C# 4 (no string interpolation, no expression-bodied members, no ?.), which
+// Unity 6 compiles as is.
 public static class EtgWebBuild
 {
     internal const string BootScenePath = "Assets/Scenes/Boot.unity";
     // The original game's only built-in scene (level0); everything else comes from bundles.
     internal const string FirstGameScenePath = "Assets/Scenes/LoadingDungeon.unity";
     private const string BundleOutput = "Assets/StreamingAssets/Assets";
-    // Relative to Assets/: Assets -> ExportedProject -> ripped -> etg/webbuild
-    private const string PlayerOutput = "../../../webbuild";
+    // Relative to Assets/: Assets -> Unity6Project -> ripped -> etg/webbuild6. While the port moves to Unity 6
+    // (port/tasks/unity6-migration.md), webbuild/ keeps the working Unity 2017.4 build.
+    private const string PlayerOutput = "../../../webbuild6";
 
     // Recovered from the original bundles with AssetRipper: which scene each scene-bundle held.
     internal static readonly Dictionary<string, string> SceneBundles = new Dictionary<string, string>
@@ -60,29 +63,29 @@ public static class EtgWebBuild
     {
         PlayerSettings.runInBackground = true;
         PlayerSettings.stripEngineCode = false;
-        PlayerSettings.SetScriptingBackend(BuildTargetGroup.WebGL, ScriptingImplementation.IL2CPP);
-        // EtG was built against the full .NET 2.0 profile; the WebGL default (2.0 Subset) lacks
-        // File.Move/ReadAllBytes, Registry, Process etc. that the game assemblies reference.
-        PlayerSettings.SetApiCompatibilityLevel(BuildTargetGroup.WebGL, ApiCompatibilityLevel.NET_2_0);
+        PlayerSettings.SetScriptingBackend(NamedBuildTarget.WebGL, ScriptingImplementation.IL2CPP);
+        // EtG was built against the full .NET 2.0 profile and the mods against .NET Framework; .NET Standard
+        // lacks File.Move/ReadAllBytes, Registry, Process etc. that they reference.
+        PlayerSettings.SetApiCompatibilityLevel(NamedBuildTarget.WebGL, ApiCompatibilityLevel.NET_Unity_4_8);
 
         // AssetRipper decompiles EtG's DX11 shaders into HLSL with DX11-style Texture2D/SamplerState.
         // The WebGL 2 (gles3) compiler accepts that; the WebGL 1 (gles) one fails on every shader.
         PlayerSettings.SetUseDefaultGraphicsAPIs(BuildTarget.WebGL, false);
         PlayerSettings.SetGraphicsAPIs(BuildTarget.WebGL, new[] { GraphicsDeviceType.OpenGLES3 });
 
-        // AssetRipper leaves this empty; 2017.4's WebGL postprocessor crashes on template.Split(':')[1].
+        // AssetRipper leaves this empty (2017.4's WebGL postprocessor crashed on template.Split(':')[1]).
         PlayerSettings.WebGL.template = "APPLICATION:Default";
-        // The wasm heap is fixed at build time (the module declares its maximum). 2032 MB is 2017.4's limit;
-        // 1536 ran out while Expand the Gungeon built its room prefabs at start.
-        PlayerSettings.WebGL.memorySize = 2032;
+        // The heap grows on demand up to the maximum. 2032 MB (2017.4's fixed heap) ran out with the mods on the
+        // first floor; 4 GB is wasm32's limit (more would switch the build to wasm64, see the migration notes).
+        PlayerSettings.WebGL.initialMemorySize = 512;
+        PlayerSettings.WebGL.maximumMemorySize = 4096;
+        PlayerSettings.WebGL.memoryGrowthMode = WebGLMemoryGrowthMode.Geometric;
         // EtG logs a lot every frame (e.g. "Unable to find clip 'select_idle'"); building a managed
         // stack trace for each Log/Warning is what makes that expensive in the browser.
         PlayerSettings.SetStackTraceLogType(LogType.Log, StackTraceLogType.None);
         PlayerSettings.SetStackTraceLogType(LogType.Warning, StackTraceLogType.None);
-        // 2017.4 always links an asm.js fallback first, and Emscripten's JS optimizer
-        // (eliminate/registerizeHarder) takes hours on Mono's 2.8 MB Regex CILCompiler function.
-        // asm2wasm -O3 optimizes the wasm build on its own, so skip the JS passes.
-        PlayerSettings.WebGL.emscriptenArgs = "--js-opts 0";
+        // 2017.4 needed "--js-opts 0" here (fastcomp's JS optimizer); clear it, Emscripten 4 has no such flag.
+        PlayerSettings.WebGL.emscriptenArgs = "";
         PlayerSettings.WebGL.dataCaching = true;
         PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
         // Full support makes il2cpp emit a null check before every member access, a bounds check on every
@@ -95,65 +98,14 @@ public static class EtgWebBuild
             ? WebGLExceptionSupport.FullWithStacktrace
             : WebGLExceptionSupport.ExplicitlyThrownExceptionsOnly;
 
-        // linkerTarget (asm.js / wasm) only exists from 2018.1. On 2017.4 the
-        // "WebAssembly (experimental)" checkbox is the serialized webGLUseWasm field.
-        PropertyInfo linker = typeof(PlayerSettings.WebGL).GetProperty("linkerTarget", BindingFlags.Public | BindingFlags.Static);
-        if (linker != null)
-        {
-            linker.SetValue(null, Enum.Parse(linker.PropertyType, "Wasm"), null);
-        }
-        else
-        {
-            SetSerializedPlayerSetting("webGLUseWasm", true);
-        }
-
         AssetDatabase.SaveAssets();
         Debug.Log("[EtG Web] Player settings applied: graphics=" +
                   string.Join(",", Array.ConvertAll(PlayerSettings.GetGraphicsAPIs(BuildTarget.WebGL), a => a.ToString())) +
                   " useDefaultAPIs=" + PlayerSettings.GetUseDefaultGraphicsAPIs(BuildTarget.WebGL) +
-                  " wasm=" + GetSerializedPlayerSetting("webGLUseWasm") +
-                  " memory=" + PlayerSettings.WebGL.memorySize +
+                  " memory=" + PlayerSettings.WebGL.initialMemorySize + ".." + PlayerSettings.WebGL.maximumMemorySize +
                   " template=" + PlayerSettings.WebGL.template +
-                  " api=" + PlayerSettings.GetApiCompatibilityLevel(BuildTargetGroup.WebGL) +
-                  " emcc+=\"" + PlayerSettings.WebGL.emscriptenArgs + "\"" +
+                  " api=" + PlayerSettings.GetApiCompatibilityLevel(NamedBuildTarget.WebGL) +
                   " exceptions=" + PlayerSettings.WebGL.exceptionSupport);
-    }
-
-    private static SerializedObject LoadPlayerSettingsObject()
-    {
-        UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/ProjectSettings.asset");
-        return assets.Length > 0 ? new SerializedObject(assets[0]) : null;
-    }
-
-    private static void SetSerializedPlayerSetting(string name, bool value)
-    {
-        SerializedObject so = LoadPlayerSettingsObject();
-        SerializedProperty prop = so == null ? null : so.FindProperty(name);
-        if (prop == null)
-        {
-            Debug.LogError("[EtG Web] Player setting not found: " + name);
-            return;
-        }
-        if (prop.propertyType == SerializedPropertyType.Boolean)
-        {
-            prop.boolValue = value;
-        }
-        else
-        {
-            prop.intValue = value ? 1 : 0;
-        }
-        so.ApplyModifiedProperties();
-    }
-
-    private static string GetSerializedPlayerSetting(string name)
-    {
-        SerializedObject so = LoadPlayerSettingsObject();
-        SerializedProperty prop = so == null ? null : so.FindProperty(name);
-        if (prop == null)
-        {
-            return "<missing>";
-        }
-        return prop.propertyType == SerializedPropertyType.Boolean ? prop.boolValue.ToString() : prop.intValue.ToString();
     }
 
     [MenuItem("EtG Web/3. Build AssetBundles (WebGL)")]
@@ -326,42 +278,18 @@ public static class EtgWebBuild
         // Always re-apply so a stale project setting can't silently produce a WebGL 1 / asm.js build.
         ApplyPlayerSettings((options & BuildOptions.Development) != 0);
         string output = Path.GetFullPath(Path.Combine(Application.dataPath, PlayerOutput));
-        DateTime started = DateTime.Now;
-        string report = BuildPipeline.BuildPlayer(new[] { BootScenePath, FirstGameScenePath }, output, BuildTarget.WebGL, options);
-        // 2017.4 returns every error logged during the build, including harmless ones from game
-        // scripts running in the editor (e.g. WwiseGlobal's DontDestroyOnLoad), so judge success
-        // by whether the loader manifest was actually (re)written.
-        string manifest = Path.Combine(Path.Combine(output, "Build"), Path.GetFileName(output) + ".json");
-        if (!File.Exists(manifest) || File.GetLastWriteTime(manifest) < started)
+        BuildReport report = BuildPipeline.BuildPlayer(new[] { BootScenePath, FirstGameScenePath }, output, BuildTarget.WebGL, options);
+        if (report.summary.result != BuildResult.Succeeded)
         {
-            // A failed build leaves the previous one in webbuild/, which is easy to mistake for the new one.
+            // A failed build leaves the previous one in the output folder, which is easy to mistake for the new one.
+            string summary = report.summary.result + ", " + report.summary.totalErrors + " errors";
             EditorUtility.DisplayDialog("EtG Web: build failed",
-                "The WebGL player was not built; webbuild/ still has the previous build.\n\n" + report +
-                "\n\nDetails: %LOCALAPPDATA%\\Unity\\Editor\\Editor.log. A release build that runs out of memory "
-                + "needs port/patch_webgl_dedupe.py (README, Building).", "OK");
-            throw new Exception("[EtG Web] Build failed: " + report);
+                "The WebGL player was not built; " + output + " still has the previous build.\n\n" + summary +
+                "\n\nDetails: %LOCALAPPDATA%\\Unity\\Editor\\Editor.log.", "OK");
+            throw new Exception("[EtG Web] Build failed: " + summary);
         }
-        if (!string.IsNullOrEmpty(report))
-        {
-            Debug.LogWarning("[EtG Web] Build succeeded, errors logged during build: " + report);
-        }
-        RemoveAsmJsFallback(output, manifest);
         CopySite(output);
         Debug.Log("[EtG Web] WebGL build written to " + output);
-    }
-
-    // 2017.4 can't build wasm without asm.js (Emscripten fastcomp: asm.js -> asm2wasm), and writes the asm.js
-    // as a fallback for browsers without WebAssembly (up to ~1 GB in development builds). The page only runs
-    // wasm: drop the files and their entries, so UnityLoader never looks for them.
-    private static void RemoveAsmJsFallback(string output, string manifest)
-    {
-        string build = Path.Combine(output, "Build");
-        foreach (string file in Directory.GetFiles(build, "*.asm.*"))
-        {
-            File.Delete(file);
-        }
-        string[] lines = File.ReadAllLines(manifest);
-        File.WriteAllLines(manifest, Array.FindAll(lines, l => !l.TrimStart().StartsWith("\"asm")));
     }
 
     // The page around the player (port/site; see install.py there, which does the same by hand).

@@ -48,7 +48,7 @@ namespace WebShim
                 using (UnityWebRequest req = UnityWebRequest.Get(Application.streamingAssetsPath + "/mods/files.pack"))
                 {
                     yield return req.SendWebRequest();
-                    if (req.isNetworkError || req.isHttpError)
+                    if (req.result != UnityWebRequest.Result.Success)
                     {
                         setError("Failed to load mod files: " + req.error);
                         yield break;

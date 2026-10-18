@@ -36,6 +36,10 @@ internal static partial class Program
         "PlayMaker.dll",
         "dfScriptLite.dll",
         "ConditionalExpression.dll",
+        "Unity.Analytics.DataPrivacy.dll",
+        // EtgUnityScript's runtime: Unity 2017 shipped it, Unity 6 doesn't (nothing to patch, installed with the rest).
+        "Boo.Lang.dll",
+        "UnityScript.Lang.dll",
     };
 
     // Unity 2017 won't load plugins named like its own script assemblies. Scene/prefab references
@@ -221,6 +225,8 @@ internal static partial class Program
                 PatchModule(module, shimApi, report);
                 PassCallerAssembly(module, callerAssemblyUsers, shimApi, report);
                 RetargetStubbedUnityTypes(module, shimApi, report);
+                NormalizeUnityNullReturns(module, shimApi, report);
+                RetargetForUnity6(module, report);
                 RenameReservedAssemblies(asm, module, report);
             }
             asm.Write(Path.Combine(outDir, asm.Name.Name + ".dll"));
@@ -506,10 +512,15 @@ internal static partial class Program
                         missingMembers[key] = missingMembers.GetValueOrDefault(key) + 1;
                         continue;
                     }
-                    if (SafeResolve(memberRef) == null)
+                    var resolved = SafeResolve(memberRef);
+                    if (resolved == null)
                     {
                         string key = $"{declaring.GetElementType().FullName}::{memberRef.Name}  ({memberRef})";
                         missingMembers[key] = missingMembers.GetValueOrDefault(key) + 1;
+                    }
+                    else if (ObsoleteErrorInEngine(resolved) is string message)
+                    {
+                        missingMembers[$"  obsolete (error) in the engine: {declaring.GetElementType().FullName}::{memberRef.Name}: {message}"] = 1;
                     }
                 }
                 // A branch whose target isn't an instruction (a short branch pushed out of range by inserted code
@@ -548,6 +559,45 @@ internal static partial class Program
         return problems == 0 ? 0 : 1;
     }
 
+    // Engine members marked [Obsolete(error: true)] that still work as before.
+    private static readonly HashSet<string> WorkingObsoleteMembers = new()
+    {
+        "UnityEngine.Object::GetInstanceID", // reads GetEntityId()
+        "UnityEngine.SystemInfo::get_supportsStencil", // returns 1
+        "UnityEngine.UnityAPICompatibilityVersionAttribute::.ctor", // an assembly attribute only the API updater reads
+    };
+
+    /// <summary>
+    /// The message of an [Obsolete(error: true)] on an engine member (or its property or type) that compiled code
+    /// can still call: some are stand-ins that throw or return null (Unity 6.6's UnityWebRequest.GetAssetBundle).
+    /// </summary>
+    private static string? ObsoleteErrorInEngine(IMemberDefinition member)
+    {
+        var type = member.DeclaringType;
+        if (!type.Module.Assembly.Name.Name.StartsWith("UnityEngine") || WorkingObsoleteMembers.Contains($"{type.FullName}::{member.Name}"))
+        {
+            return null;
+        }
+        var holders = new List<ICustomAttributeProvider> { member };
+        if (member is MethodDefinition method)
+        {
+            holders.AddRange(type.Properties.Where(p => p.GetMethod == method || p.SetMethod == method));
+        }
+        for (var t = type; t != null; t = t.DeclaringType)
+        {
+            holders.Add(t);
+        }
+        foreach (var holder in holders)
+        {
+            var obsolete = holder.CustomAttributes.FirstOrDefault(a => a.AttributeType.FullName == "System.ObsoleteAttribute");
+            if (obsolete != null && obsolete.ConstructorArguments.Count > 1 && obsolete.ConstructorArguments[1].Value is true)
+            {
+                return obsolete.ConstructorArguments[0].Value as string ?? "";
+            }
+        }
+        return null;
+    }
+
     private static TypeDefinition? SafeResolve(TypeReference type)
     {
         try { return type.Resolve(); }
@@ -560,13 +610,16 @@ internal static partial class Program
         catch (AssemblyResolutionException) { return null; }
     }
 
-    // UnityEngine types removed from the WebGL player; WebShim/UnityStubs.cs defines look-alikes.
+    // UnityEngine types removed from the WebGL player; WebShim/UnityStubs.cs defines look-alikes. GUIText & co. still
+    // exist in Unity 6, but as empty classes that aren't Components: PlayMaker's ComponentAction<GUIText> then fails to
+    // load, and with it every GetTypes() of EtgGame (FullInspector's static init in the editor).
     private static readonly HashSet<string> StubbedUnityTypes = new()
     {
         "Network", "NetworkView", "NetworkViewID", "NetworkPlayer", "NetworkMessageInfo",
         "NetworkConnectionError", "NetworkDisconnection", "NetworkLogLevel", "NetworkPeerType",
         "MasterServer", "MasterServerEvent", "HostData", "BitStream", "RPC",
         "MovieTexture", "ProceduralMaterial",
+        "GUIElement", "GUIText", "GUITexture", "GUILayer",
     };
 
     // Class library types missing from the WebGL profile, implemented in WebShim/SystemStubs.cs.
@@ -876,6 +929,10 @@ internal static partial class Program
 
                 case "UnityEngine.WWW":
                     replacement = sig == "GetMovieTexture()" ? shim.Media("GetMovieTexture", "UnityEngine.WWW") : null;
+                    break;
+
+                case "UnityEngine.TextEditor":
+                    replacement = sig == "get_content()" ? shim.Find("WebShim.ImguiShim", "GetContent", ["UnityEngine.TextEditor"]) : null;
                     break;
             }
 

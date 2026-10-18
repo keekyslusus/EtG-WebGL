@@ -1,12 +1,14 @@
 // Stand-ins for UnityEngine types that exist on desktop but were removed from the WebGL player
-// (legacy RakNet networking, MovieTexture, Substance ProceduralMaterial). EtG never uses them at
-// runtime - they're only referenced by PlayMaker's networking/movie actions - but UnityLinker refuses
-// to process an assembly that references a type it can't find. The patcher retargets those type
+// (legacy RakNet networking, MovieTexture, Substance ProceduralMaterial) or from Unity altogether (GUIText,
+// GUITexture, GUIElement, GUILayer: Unity 6 keeps empty classes that aren't Components, which breaks
+// PlayMaker's ComponentAction<GUIText>). EtG never uses them at runtime - they're only referenced by
+// PlayMaker actions, iTween and camera setup code - but UnityLinker refuses to process an assembly that
+// references a type it can't find, and the editor's Mono unloads it. The patcher retargets those type
 // references from UnityEngine.* to WebShim, so the signatures below must match Unity's exactly
 // (static vs instance, struct vs class, parameter types). Every member is a no-op.
 //
-// Type names deliberately shadow UnityEngine's (CS0436 is expected against the desktop modules
-// we compile against; the WebGL modules don't contain these types at all).
+// Type names deliberately shadow UnityEngine's (CS0436 is expected where the modules we compile
+// against still have a type of that name).
 #pragma warning disable 0436
 
 using System;
@@ -179,5 +181,42 @@ namespace UnityEngine
         public void SetProceduralBoolean(string inputName, bool inputValue) { }
         public void RebuildTextures() { }
         public void RebuildTexturesImmediately() { }
+    }
+
+    public class GUIElement : Behaviour
+    {
+        public bool HitTest(Vector3 screenPosition) { return false; }
+        public bool HitTest(Vector3 screenPosition, Camera camera) { return false; }
+        public Rect GetScreenRect() { return default(Rect); }
+        public Rect GetScreenRect(Camera camera) { return default(Rect); }
+    }
+
+    public sealed class GUIText : GUIElement
+    {
+        public string text { get { return ""; } set { } }
+        public Material material { get { return null; } set { } }
+        public Vector2 pixelOffset { get { return default(Vector2); } set { } }
+        public Font font { get { return null; } set { } }
+        public TextAlignment alignment { get { return TextAlignment.Left; } set { } }
+        public TextAnchor anchor { get { return TextAnchor.UpperLeft; } set { } }
+        public float lineSpacing { get { return 1f; } set { } }
+        public float tabSize { get { return 4f; } set { } }
+        public int fontSize { get { return 0; } set { } }
+        public FontStyle fontStyle { get { return FontStyle.Normal; } set { } }
+        public bool richText { get { return false; } set { } }
+        public Color color { get { return Color.white; } set { } }
+    }
+
+    public sealed class GUITexture : GUIElement
+    {
+        public Color color { get { return Color.white; } set { } }
+        public Texture texture { get { return null; } set { } }
+        public Rect pixelInset { get { return default(Rect); } set { } }
+        public RectOffset border { get { return null; } set { } }
+    }
+
+    public sealed class GUILayer : Behaviour
+    {
+        public GUIElement HitTest(Vector3 screenPosition) { return null; }
     }
 }

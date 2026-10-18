@@ -11,12 +11,19 @@ public static class EtgWebPlayMode
 {
     private const string SimulateKey = "EtgWeb.SimulateBundles";
     private const string SimulateMenu = "EtG Web/Simulate Bundles In Play Mode";
-    private const string GraphicsEmulationMenu = "Edit/Graphics Emulation/WebGL 2.0";
 
     // Runs after every domain reload, including the one on entering Play Mode, which resets the
     // runtime DLL's statics - so this is what turns the simulation on inside Play Mode.
     static EtgWebPlayMode()
     {
+        // Unity 6 compiles a shader variant the editor hasn't used yet in the background and draws with a cyan
+        // placeholder meanwhile: a one-frame cyan flash the first time something appears (the pause menu...). The
+        // player has every variant precompiled; in the editor wait for the compile instead, as 2017.4 did (this also
+        // keeps the placeholder out of abtest / variant-selection renders).
+        if (EditorSettings.asyncShaderCompilation)
+        {
+            EditorSettings.asyncShaderCompilation = false;
+        }
         WebShim.BundleShim.Simulation = Simulate;
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
     }
@@ -48,12 +55,8 @@ public static class EtgWebPlayMode
         EtgWebBuild.SetupBootScene();
         AddBundleScenesToBuildSettings();
         EditorSceneManager.OpenScene(EtgWebBuild.BootScenePath, OpenSceneMode.Single);
-        // With the WebGL target active the editor defaults to "WebGL 1.0" emulation (GLES2 caps,
-        // shader level 30); the player runs WebGL 2 only, so pick shaders/caps the way it does.
-        if (!EditorApplication.ExecuteMenuItem(GraphicsEmulationMenu))
-        {
-            Debug.LogWarning("[EtG Web] Menu item not found: " + GraphicsEmulationMenu);
-        }
+        // Unity 2017.4 needed Edit -> Graphics Emulation -> WebGL 2.0 here (it defaulted to WebGL 1.0 caps); Unity 6
+        // has no graphics emulation, the editor runs with its own device's caps (GLES 3.0 via open-gles30.ps1).
         EditorApplication.isPlaying = true;
     }
 

@@ -2,19 +2,20 @@
   <!--
     Stand-ins for the BepInEx modding stack in the web build: same assembly names and the API surface
     the baked mods still call at runtime (port/ModBaker already applied every patch, so Harmony's
-    PatchAll and MonoMod's Hook do nothing here). net35 like WebShim (Unity 2017.4 legacy runtime).
+    PatchAll and MonoMod's Hook do nothing here). Built like WebShim: net472, Unity 6.6's WebGL modules.
   -->
   <PropertyGroup>
-    <TargetFramework>net35</TargetFramework>
-    <LangVersion>7.3</LangVersion>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>9.0</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <GameManaged>$(MSBuildThisFileDirectory)..\..\Enter the Gungeon\EtG_Data\Managed\</GameManaged>
+    <UnityEditorData Condition="'$(UnityEditorData)' == ''">C:\Program Files\Unity\Hub\Editor\6000.6.5f1\Editor\Data</UnityEditorData>
+    <UnityManaged>$(UnityEditorData)\PlaybackEngines\WebGLSupport\Variations\il2cpp\Managed\</UnityManaged>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net35" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net472" Version="1.0.3" PrivateAssets="all" />
   </ItemGroup>
 </Project>

@@ -66,7 +66,7 @@ namespace WebShim
             {
                 return unchecked((ulong)-1L);
             }
-            int id = gameObject.GetInstanceID();
+            int id = unchecked((int)EntityId.ToULong(gameObject.GetEntityId())); // GetInstanceID() without the obsolete error
             if (Enabled && !s_objects.ContainsKey(id))
             {
                 s_objects[id] = gameObject;

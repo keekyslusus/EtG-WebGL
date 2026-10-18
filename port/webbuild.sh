@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Builds the WebGL player into webbuild/ without opening the editor: apply.sh, then a batchmode build with the
-# patched Unity copy in tools/unity-2017.4.27f1 (README, Building). Unity must be closed. A modded development build
-# takes about two hours.
+# Builds the WebGL player into webbuild6/ without opening the editor: apply.sh, then a batchmode build with Unity 6.6
+# (webbuild/ keeps the Unity 2017.4 build while the port moves, port/tasks/unity6-migration.md). Unity must be closed.
 #   bash port/webbuild.sh [--mods] [--release] [--no-apply]
-# Log: port/build/webbuild.log (Unity's own log of the build). Exit code 0 only if the loader manifest was rewritten.
+# Log: port/build/webbuild.log (Unity's own log of the build). Exit code 0 only if the loader was rewritten.
 set -euo pipefail
 
 PORT="$(cd "$(dirname "$0")" && pwd)"
@@ -20,7 +19,7 @@ for arg in "$@"; do
     esac
 done
 
-if tasklist //FI "IMAGENAME eq Unity.exe" //NH 2>/dev/null | grep -qi "^Unity.exe"; then
+if bash "$PORT/unity_running.sh"; then
     echo "Unity is running - close it first." >&2
     exit 1
 fi
@@ -29,9 +28,9 @@ if [ "$APPLY" = 1 ]; then
     bash "$PORT/apply.sh" $MODS
 fi
 
-UNITY="$ROOT/tools/unity-2017.4.27f1/Editor/Unity.exe"
-PROJECT="$(cygpath -w "$ROOT/ripped/ExportedProject")"
-MANIFEST="$ROOT/webbuild/Build/webbuild.json"
+UNITY="${UNITY_EXE:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe}"
+PROJECT="$(cygpath -w "$ROOT/ripped/Unity6Project")"
+MANIFEST="$ROOT/webbuild6/Build/webbuild6.loader.js"
 mkdir -p "$PORT/build"
 LOG="$PORT/build/webbuild.log"
 LOG_WIN="$(cygpath -w "$LOG")"
@@ -45,9 +44,9 @@ echo "== Unity exited with $status at $(date '+%F %T')"
 
 if [ -f "$MANIFEST" ] && [ "$MANIFEST" -nt "$STAMP" ] && grep -q "\[EtG Web\] WebGL build written to" "$LOG"; then
     echo "== Build OK: $(dirname "$MANIFEST")"
-    ls -la "$ROOT/webbuild/Build"
+    ls -la "$ROOT/webbuild6/Build"
     exit 0
 fi
-echo "== Build FAILED (webbuild/ still has the previous build). Errors from the log:" >&2
+echo "== Build FAILED (webbuild6/ still has the previous build). Errors from the log:" >&2
 grep -n -i -E "error|exception|failed" "$LOG" | tail -40 >&2 || true
 exit 1

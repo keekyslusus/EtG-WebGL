@@ -3,7 +3,7 @@
 Unity's default template writes its own index.html on every player build; EtgWebBuild.BuildPlayer
 does the same copy afterwards, this script is for doing it by hand.
 
-Usage: python port/site/install.py [webbuild dir]
+Usage: python port/site/install.py [webbuild dir, default webbuild6]
 """
 import os
 import shutil
@@ -14,7 +14,7 @@ FILES = ["index.html", "etg-site.js", "etg-site.css"]
 
 
 def main():
-    out = os.path.normpath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "../../webbuild"))
+    out = os.path.normpath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "../../webbuild6"))
     if not os.path.isdir(os.path.join(out, "Build")):
         raise SystemExit("No Build/ in " + out)
     for name in FILES:

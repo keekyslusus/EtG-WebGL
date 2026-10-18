@@ -1,19 +1,19 @@
-# Opens the ripped project in Unity 2017.4 rendering through OpenGL ES 3.0 (-force-gles30),
+# Opens the ripped project in Unity 6.6 rendering through OpenGL ES 3.0 (-force-gles30),
 # which is much closer to the WebGL 2 player than the default Direct3D 11 - use it to
 # reproduce browser-only rendering problems (lighting, render texture formats) in Play Mode.
 # Usage: powershell -ExecutionPolicy Bypass -File open-gles30.ps1
 $ErrorActionPreference = 'Stop'
 
-$unity = 'C:\Program Files\Unity\Hub\Editor\2017.4.27f1\Editor\Unity.exe'
-$project = Join-Path $PSScriptRoot 'ripped\ExportedProject'
+$unity = 'C:\Program Files\Unity\Hub\Editor\6000.6.5f1\Editor\Unity.exe'
+$project = Join-Path $PSScriptRoot 'ripped\Unity6Project'
 
-if (-not (Test-Path $unity)) { throw "Unity 2017.4.27f1 not found: $unity" }
+if (-not (Test-Path $unity)) { throw "Unity 6000.6.5f1 not found: $unity" }
 if (-not (Test-Path $project)) { throw "Project not found: $project" }
 
 # A second editor can't open a project that is already open (Temp\UnityLockfile is held).
 $running = Get-Process -Name Unity -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $unity }
 if ($running) {
-    Write-Host 'Unity 2017.4 is already running - close it first, then run this script again.' -ForegroundColor Yellow
+    Write-Host 'Unity 6.6 is already running - close it first, then run this script again.' -ForegroundColor Yellow
     exit 1
 }
 

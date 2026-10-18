@@ -36,7 +36,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PORT_DIR = HERE.parent
 ROOT = PORT_DIR.parent
-WEBAUDIO = ROOT / "ripped" / "ExportedProject" / "Assets" / "StreamingAssets" / "webaudio"
+WEBAUDIO = ROOT / "ripped" / "Unity6Project" / "Assets" / "StreamingAssets" / "webaudio"
 WWISEREF = PORT_DIR / "build" / "WwiseRef" / "WwiseRef.exe"
 CHROME_CANDIDATES = [
     Path(os.environ.get("PROGRAMFILES", "C:/Program Files")) / "Google/Chrome/Application/chrome.exe",

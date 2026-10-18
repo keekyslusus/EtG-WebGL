@@ -16,9 +16,9 @@ set -euo pipefail
 
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
-PROJECT="$ROOT/ripped/ExportedProject"
+PROJECT="$ROOT/ripped/Unity6Project"
 OUT="$PORT/build/abtest"
-UNITY="${UNITY:-/c/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Unity.exe}"
+UNITY="${UNITY:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe}"
 
 apply=1; runs="d3d11 gles30 d3d11"; report_only=0; unity_args=(); report_args=()
 while [ $# -gt 0 ]; do
@@ -38,7 +38,7 @@ done
 win() { cygpath -w "$1"; }
 
 if [ $report_only = 0 ]; then
-    if tasklist //FI "IMAGENAME eq Unity.exe" 2>/dev/null | grep -qi "unity.exe"; then
+    if bash "$PORT/unity_running.sh"; then
         echo "Unity is running - close it first (the project can only be open in one editor)."
         exit 1
     fi

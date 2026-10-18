@@ -3,8 +3,8 @@
     python port/audio/build_audio.py [--jobs N] [--force]
     python port/audio/build_audio.py --mods port/build/audio/mods   (the baked mods' banks; apply.sh --mods)
 
-Output (OUT = ripped/ExportedProject/Assets/StreamingAssets/webaudio, mirrored to
-webbuild/StreamingAssets/webaudio when that exists):
+Output (OUT = ripped/Unity6Project/Assets/StreamingAssets/webaudio, mirrored to
+webbuild6/StreamingAssets/webaudio when that exists):
   audio.json    events, actions, the node tree (sounds, containers, music), busses, states,
                 attenuations and an index of where each media file lives
   sfx<N>.pack   sound effect media, Ogg Opus files concatenated (loaded in the background at boot)
@@ -37,8 +37,8 @@ ROOT = os.path.dirname(PORT)
 BANKS = os.path.join(ROOT, "Enter the Gungeon", "EtG_Data", "StreamingAssets", "Audio", "GeneratedSoundBanks", "Windows")
 VGMSTREAM = os.path.join(ROOT, "tools", "vgmstream", "vgmstream-cli.exe")
 CACHE = os.path.join(PORT, "build", "audio")
-OUT = os.path.join(ROOT, "ripped", "ExportedProject", "Assets", "StreamingAssets", "webaudio")
-WEB_OUT = os.path.join(ROOT, "webbuild", "StreamingAssets", "webaudio")
+OUT = os.path.join(ROOT, "ripped", "Unity6Project", "Assets", "StreamingAssets", "webaudio")
+WEB_OUT = os.path.join(ROOT, "webbuild6", "StreamingAssets", "webaudio")
 
 # Opus bitrates (kbit/s). Wwise ADPCM is ~144 kbit/s per channel at 36 kHz.
 BITRATE = {("sfx", 1): 48, ("sfx", 2): 80, ("music", 1): 64, ("music", 2): 96}

@@ -40,6 +40,11 @@ port/
 
 ## Building
 
+> **Branch `unity6`: the port is moving to Unity 6000.6.5f1** (`port/tasks/unity6-migration.md`).
+> Here `apply.sh` installs into `ripped/Unity6Project` (created from `ripped/ExportedProject` on the first run), player
+> builds go to `webbuild6/`, and steps 5-6 below (asm2wasm, `patch_webgl_*`, Graphics Emulation) don't apply. The
+> steps describe the Unity 2017.4 build of `master` until the migration is done.
+
 1. Copy the game into `Enter the Gungeon/`.
 2. **AssetRipper** (settings: *Script Export Format* = `Dll Export Without Renaming`,
    *Shader Export Format* = `Decompilation`) -> open the game folder -> *Export Unity Project*

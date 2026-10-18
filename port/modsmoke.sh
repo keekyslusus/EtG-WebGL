@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the mod smoke test without anyone at the editor (port/README.md, Mods -> Smoke test): opens the
-# project in Unity 2017.4 through OpenGL ES 3.0 like open-gles30.ps1 (closer to the WebGL 2 player than
+# project in Unity 6.6 through OpenGL ES 3.0 like open-gles30.ps1 (closer to the WebGL 2 player than
 # D3D11), asks EtgModSmokeMenu for a run and waits until the editor exits by itself.
 #   bash port/modsmoke.sh [phases]     phases: all (default) | items,shop | enemies | floors,flows ...
 # port/build/modsmoke/only.txt limits the run as from the menu. Report: port/build/modsmoke/report.md.
@@ -15,12 +15,12 @@ HANG_MINUTES="${HANG_MINUTES:-6}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-8}"
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
-UNITY="${UNITY_EXE:-/c/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Unity.exe}"
-PROJECT="$(cygpath -w "$ROOT/ripped/ExportedProject")"
+UNITY="${UNITY_EXE:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe}"
+PROJECT="$(cygpath -w "$ROOT/ripped/Unity6Project")"
 LOG="$LOCALAPPDATA/Unity/Editor/Editor.log"
 OUT="$ROOT/port/build/modsmoke"
 
-unity_running() { tasklist //FI "IMAGENAME eq Unity.exe" //NH 2>/dev/null | grep -qi "^Unity.exe"; }
+unity_running() { bash "$PORT/unity_running.sh"; }
 
 if unity_running; then
     echo "Unity is running - close it first." >&2

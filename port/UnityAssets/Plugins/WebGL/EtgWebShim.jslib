@@ -9,7 +9,12 @@
 // one right away.
 //
 // Native side of WebShim.XInputShim: browser gamepads as XInput controllers.
+//
+// Pointers: with a heap over 2 GB a wasm32 pointer arrives as a negative int and `ptr >> 2` breaks; on
+// wasm64 it is a BigInt. A "p" in __sig plus Unity's ptrToIdx macro (BuildTools/lib/AA_Wasm64Support.js)
+// give the right heap index in every memory mode.
 mergeInto(LibraryManager.library, {
+  EtgSyncFS__deps: ['$FS'],
   EtgSyncFS: function () {
     if (Module.etgSyncTimer) {
       clearTimeout(Module.etgSyncTimer);
@@ -24,11 +29,13 @@ mergeInto(LibraryManager.library, {
     }, 250);
   },
 
+  EtgAudioInit__deps: ['$UTF8ToString'],
+  EtgAudioInit__sig: 'vp',
   EtgAudioInit: function (baseUrl) {
     if (Module.etgAudio) {
       return;
     }
-    var base = Pointer_stringify(baseUrl);
+    var base = UTF8ToString(baseUrl);
     var audio = { queue: [], nextPid: 1, engine: null };
     audio.call = function (name, args) {
       if (audio.engine) {
@@ -127,7 +134,9 @@ mergeInto(LibraryManager.library, {
   // buttons; byte LT, RT; short LX, LY, RX, RY) from the index-th connected browser gamepad.
   // The Gamepad API's "standard" mapping is the Xbox layout; other mappings are read the same
   // way as a best effort. Returns ERROR_SUCCESS (0) or ERROR_DEVICE_NOT_CONNECTED (1167).
+  EtgGamepadGetState__sig: 'iip',
   EtgGamepadGetState: function (index, ptr) {
+    var p8 = {{{ ptrToIdx('ptr') }}}, p16 = {{{ ptrToIdx('ptr', 1) }}}, p32 = {{{ ptrToIdx('ptr', 2) }}};
     var pads = navigator.getGamepads ? navigator.getGamepads() : [];
     var pad = null;
     for (var i = 0, n = 0; i < pads.length; i++) {
@@ -138,10 +147,10 @@ mergeInto(LibraryManager.library, {
         }
       }
     }
-    HEAPU32[ptr >> 2] = 0;
-    HEAPU32[(ptr + 4) >> 2] = 0;
-    HEAPU32[(ptr + 8) >> 2] = 0;
-    HEAPU32[(ptr + 12) >> 2] = 0;
+    HEAPU32[p32] = 0;
+    HEAPU32[p32 + 1] = 0;
+    HEAPU32[p32 + 2] = 0;
+    HEAPU32[p32 + 3] = 0;
     if (!pad) {
       return 1167;
     }
@@ -158,15 +167,15 @@ mergeInto(LibraryManager.library, {
     for (var j = 0; j < bits.length; j++) {
       if (bits[j] && down(j)) buttons |= bits[j];
     }
-    HEAPU32[ptr >> 2] = Math.floor(pad.timestamp) >>> 0;
-    HEAPU16[(ptr + 4) >> 1] = buttons;
-    HEAPU8[ptr + 6] = Math.round(value(6) * 255);
-    HEAPU8[ptr + 7] = Math.round(value(7) * 255);
+    HEAPU32[p32] = Math.floor(pad.timestamp) >>> 0;
+    HEAPU16[p16 + 2] = buttons;
+    HEAPU8[p8 + 6] = Math.round(value(6) * 255);
+    HEAPU8[p8 + 7] = Math.round(value(7) * 255);
     // The Gamepad API's Y axes point down, XInput's up.
-    HEAP16[(ptr + 8) >> 1] = axis(0, 1);
-    HEAP16[(ptr + 10) >> 1] = axis(1, -1);
-    HEAP16[(ptr + 12) >> 1] = axis(2, 1);
-    HEAP16[(ptr + 14) >> 1] = axis(3, -1);
+    HEAP16[p16 + 4] = axis(0, 1);
+    HEAP16[p16 + 5] = axis(1, -1);
+    HEAP16[p16 + 6] = axis(2, 1);
+    HEAP16[p16 + 7] = axis(3, -1);
     return 0;
   },
 

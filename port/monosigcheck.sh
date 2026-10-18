@@ -8,7 +8,7 @@ set -u
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ETG="$(dirname "$PORT")"
 DATA="$ETG/tools/unity-2017.4.27f1/Editor/Data"
-PLUGINS="$ETG/ripped/ExportedProject/Assets/Plugins"
+PLUGINS="$ETG/ripped/Unity6Project/Assets/Plugins"
 OUT="$PORT/build/monosigcheck"
 mkdir -p "$OUT"
 

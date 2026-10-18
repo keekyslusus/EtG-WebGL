@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds WebShim + Patcher, patches the game's original assemblies and installs
-# everything into the AssetRipper-exported Unity project. Safe to re-run.
+# everything into the Unity 6.6 project ripped/Unity6Project. Safe to re-run.
+# The project starts as a copy of the AssetRipper export (ripped/ExportedProject, which stays the
+# Unity 2017.4 project of the master branch), made on the first run.
 #   ./apply.sh          vanilla game (removes mods a previous --mods run installed)
 #   ./apply.sh --mods   with the mods of mods/modpack.txt baked in (ModBaker, see README "Mods")
 set -euo pipefail
@@ -12,7 +14,7 @@ fi
 
 # Replacing the plugin DLLs under a running editor makes it hot-reload them, and that reload can leave its
 # script domain broken (even Unity's own UnityEngine.UI / UnityEngine.Timeline stop resolving until restart).
-if [ "${APPLY_WHILE_UNITY_OPEN:-0}" != 1 ] && tasklist //FI "IMAGENAME eq Unity.exe" //NH 2>/dev/null | grep -qi "^Unity.exe"; then
+if [ "${APPLY_WHILE_UNITY_OPEN:-0}" != 1 ] && bash "$(dirname "$0")/unity_running.sh"; then
     echo "Unity is running - close it first (or APPLY_WHILE_UNITY_OPEN=1 to go ahead anyway)." >&2
     exit 1
 fi
@@ -20,10 +22,24 @@ fi
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
 MANAGED="$ROOT/Enter the Gungeon/EtG_Data/Managed"
-PROJECT="$ROOT/ripped/ExportedProject"
+EXPORTED="$ROOT/ripped/ExportedProject"
+PROJECT="$ROOT/ripped/Unity6Project"
 REMOVED="$ROOT/ripped/_removed"
+UNITY_DATA="${UNITY_DATA:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Data}"
+
+if [ ! -d "$PROJECT/Assets" ]; then
+    echo "== Creating $PROJECT from $EXPORTED (Assets, ProjectSettings)"
+    mkdir -p "$PROJECT"
+    cp -r "$EXPORTED/Assets" "$EXPORTED/ProjectSettings" "$PROJECT/"
+    # WebGL bundles of the 2017.4 build: Unity 6 can't load them, EtG Web -> 3 builds new ones.
+    rm -rf "$PROJECT/Assets/StreamingAssets/Assets" "$PROJECT/Assets/StreamingAssets/Assets.meta"
+fi
+mkdir -p "$PROJECT/Packages"
+cp -f "$PORT/UnityPackages/manifest.json" "$PROJECT/Packages/manifest.json"
 
 echo "== Building WebShim and Patcher"
+# WebShim and the mod facades compile against this editor's WebGL modules (MSBuild reads the variable as a property).
+export UnityEditorData="$(cygpath -w "$UNITY_DATA")"
 dotnet build "$PORT/WebShim" -c Release -o "$PORT/build/WebShim" -nologo -v q
 dotnet build "$PORT/Patcher" -c Release -o "$PORT/build/Patcher" -nologo -v q
 
@@ -40,15 +56,17 @@ else
 fi
 
 echo "== Verifying every reference resolves against the WebGL player libraries"
-UNITY_DATA="${UNITY_DATA:-/c/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Data}"
-if [ -d "$UNITY_DATA" ]; then
-    X="$UNITY_DATA/UnityExtensions/Unity"
-    dotnet "$PORT/build/Patcher/Patcher.dll" verify "$PORT/build/patched" \
-        "$UNITY_DATA/PlaybackEngines/WebGLSupport/Managed" "$UNITY_DATA/Mono/lib/mono/unity" \
-        "$X/GUISystem" "$X/Networking" "$X/Timeline/Runtime" "$X/UnitySpatialTracking/Runtime" \
-        "$PROJECT/Assets/Plugins" | grep -v ": OK$"
+# UnityEngine.UI and Unity.Timeline are packages: their DLLs exist once the editor has compiled the project.
+PACKAGE_DLLS="$PROJECT/Library/ScriptAssemblies"
+if [ ! -d "$UNITY_DATA" ]; then
+    echo "   (Unity 6.6 not found at $UNITY_DATA, skipping)"
+elif [ ! -f "$PACKAGE_DLLS/UnityEngine.UI.dll" ] || [ ! -f "$PACKAGE_DLLS/Unity.Timeline.dll" ]; then
+    echo "   (skipped: no UnityEngine.UI / Unity.Timeline in $PACKAGE_DLLS yet - open the project once, run apply.sh again)"
 else
-    echo "   (Unity 2017.4.27f1 not found at $UNITY_DATA, skipping)"
+    AOT="$UNITY_DATA/MonoBleedingEdge/lib/mono/unityaot-win32"
+    dotnet "$PORT/build/Patcher/Patcher.dll" verify "$PORT/build/patched" \
+        "$UNITY_DATA/PlaybackEngines/WebGLSupport/Variations/il2cpp/Managed" "$AOT" "$AOT/Facades" \
+        "$PACKAGE_DLLS" "$PROJECT/Assets/Plugins" | grep -v ": OK$"
 fi
 
 echo "== Installing into Unity project"
@@ -98,19 +116,20 @@ if [ "$MODS" = 1 ]; then
     rm -rf "$PORT/build/il2cpp-resources"
     "$PORT/build/ModBaker/ModBaker.exe" resources "$PORT/build/patched" "$PORT/build/il2cpp-resources"
     python "$PORT/mods/build_pack.py" "$PORT/mods/modpack.txt" "$ROOT/mods" "$MODS_ASSETS/files.pack" "$ROOT/mods-runtime" "$PORT/build/il2cpp-resources"
-    if [ -d "$ROOT/webbuild/StreamingAssets" ]; then
+    if [ -d "$ROOT/webbuild6/StreamingAssets" ]; then
         # files.pack and the mods' videos (StreamingAssets/mods/video)
-        rm -rf "$ROOT/webbuild/StreamingAssets/mods"
-        mkdir -p "$ROOT/webbuild/StreamingAssets/mods"
-        ( cd "$MODS_ASSETS" && find . -type f ! -name '*.meta' -exec cp --parents -f {} "$ROOT/webbuild/StreamingAssets/mods/" \; )
+        rm -rf "$ROOT/webbuild6/StreamingAssets/mods"
+        mkdir -p "$ROOT/webbuild6/StreamingAssets/mods"
+        ( cd "$MODS_ASSETS" && find . -type f ! -name '*.meta' -exec cp --parents -f {} "$ROOT/webbuild6/StreamingAssets/mods/" \; )
     fi
 else
-    rm -rf "$MODS_ASSETS" "$MODS_ASSETS.meta" "$PROJECT/Assets/EtgMods" "$PROJECT/Assets/EtgMods.meta" "$ROOT/webbuild/StreamingAssets/mods"
-    for d in "$PROJECT/Assets/StreamingAssets/webaudio" "$ROOT/webbuild/StreamingAssets/webaudio"; do
+    rm -rf "$MODS_ASSETS" "$MODS_ASSETS.meta" "$PROJECT/Assets/EtgMods" "$PROJECT/Assets/EtgMods.meta" "$ROOT/webbuild6/StreamingAssets/mods"
+    for d in "$PROJECT/Assets/StreamingAssets/webaudio" "$ROOT/webbuild6/StreamingAssets/webaudio"; do
         rm -rf "$d/mods" "$d/mods.meta" "$d/mods.json" "$d/mods.json.meta"
     done
 fi
 cp -rf "$PORT/UnityAssets/." "$PROJECT/Assets/"
+python "$PORT/unity_plugins.py" "$PROJECT"
 
 # Replace AssetRipper's dummy shaders with USCSandbox-decompiled ones (decompile_shaders.sh),
 # matched by the name in `Shader "..."`. The .meta files - and with them every material's
@@ -178,4 +197,4 @@ for d in Assets Audio; do
     fi
 done
 
-echo "== Done. Open $PROJECT in Unity 2017.4.27f1 and use the 'EtG Web' menu."
+echo "== Done. Open $PROJECT in Unity 6000.6.5f1 and use the 'EtG Web' menu."

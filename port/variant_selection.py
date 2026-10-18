@@ -673,10 +673,10 @@ def report(out, counts, exhaustive, issues, unchecked, strip, observed, sens, ma
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--project", type=Path, default=ROOT / "ripped/ExportedProject")
+    parser.add_argument("--project", type=Path, default=ROOT / "ripped/Unity6Project")
     parser.add_argument("--dump", type=Path, default=ROOT / "tools/uscs/dump")
     parser.add_argument("--out", type=Path, default=ROOT / "port/build/variant-selection")
-    parser.add_argument("--unity", type=Path, default=Path("C:/Program Files/Unity/Hub/Editor/2017.4.27f1/Editor/Unity.exe"))
+    parser.add_argument("--unity", type=Path, default=Path("C:/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe"))
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--static-only", action="store_true")
     mode.add_argument("--report-only", action="store_true")

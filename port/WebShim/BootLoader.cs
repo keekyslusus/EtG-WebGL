@@ -60,10 +60,10 @@ namespace WebShim
             // BuildAssetBundles writes a manifest bundle named after the output folder ("Assets").
             AssetBundleManifest manifest = null;
             m_current = "manifest";
-            using (UnityWebRequest req = UnityWebRequest.GetAssetBundle(root + "Assets"))
+            using (UnityWebRequest req = UnityWebRequestAssetBundle.GetAssetBundle(root + "Assets"))
             {
                 yield return req.SendWebRequest();
-                AssetBundle manifestBundle = (req.isNetworkError || req.isHttpError) ? null : DownloadHandlerAssetBundle.GetContent(req);
+                AssetBundle manifestBundle = req.result != UnityWebRequest.Result.Success ? null : DownloadHandlerAssetBundle.GetContent(req);
                 if (manifestBundle != null)
                 {
                     manifest = manifestBundle.LoadAsset<AssetBundleManifest>("AssetBundleManifest");
@@ -100,8 +100,8 @@ namespace WebShim
                     continue;
                 }
                 using (UnityWebRequest req = manifest != null
-                    ? UnityWebRequest.GetAssetBundle(root + name, manifest.GetAssetBundleHash(name), 0u)
-                    : UnityWebRequest.GetAssetBundle(root + name, CacheVersion, 0u))
+                    ? UnityWebRequestAssetBundle.GetAssetBundle(root + name, manifest.GetAssetBundleHash(name), 0u)
+                    : UnityWebRequestAssetBundle.GetAssetBundle(root + name, CacheVersion, 0u))
                 {
                     AsyncOperation op = req.SendWebRequest();
                     while (!op.isDone)
@@ -109,7 +109,7 @@ namespace WebShim
                         m_currentProgress = req.downloadProgress;
                         yield return null;
                     }
-                    if (req.isNetworkError || req.isHttpError)
+                    if (req.result != UnityWebRequest.Result.Success)
                     {
                         m_error = "Failed to load " + name + ": " + req.error;
                         Debug.LogError("[WebShim] " + m_error);

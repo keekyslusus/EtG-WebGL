@@ -1,8 +1,125 @@
 # Оценка: перенос порта с Unity 2017.4 на Unity 6.6 (WebAssembly64) или 2021/2022 LTS
 
-Spike от 2026-10-18, миграции нет: рабочая 2017.4-сборка не тронута (`ripped/ExportedProject`, `webbuild/` и
-`port/` кроме этого файла не менялись). Всё ниже — по офлайн-анализу и по пробному открытию копии проекта в
-Unity 6000.6.5f1.
+Spike от 2026-10-18: офлайн-анализ и пробное открытие копии проекта в Unity 6000.6.5f1 (разделы с «Зачем» и ниже).
+Миграция на 6.6 начата в тот же день на ветке `unity6` — см. «Ход миграции».
+
+## Ход миграции
+
+Рабочая 2017.4-сборка не трогается до конца переезда: проект 6.6 — отдельный `ripped/Unity6Project`, сборка плеера
+идёт в `webbuild6/`, а `ripped/ExportedProject` и `webbuild/` остаются проектом и сборкой ветки `master`.
+
+### Сделано (шаги 1–2 «Порядка работ»: патчер + `verify`, чистый импорт)
+
+- **Проект.** Первый `apply.sh` копирует в `ripped/Unity6Project` `Assets` и `ProjectSettings` из
+  `ripped/ExportedProject` (без 2017-х WebGL-бандлов в `StreamingAssets/Assets`). Пакеты — из
+  `port/UnityPackages/manifest.json`: модули 2017.4 без `vr` + `com.unity.ugui` 2.6.0 и `com.unity.timeline` 6.6.0
+  (оба встроены в редактор, ничего не качается). При первом открытии Unity по-прежнему дописывает 11 пакетов
+  «для старых проектов» (analytics, purchasing, newtonsoft-json...); следующий `apply.sh` возвращает манифест, и
+  Unity их убирает.
+- **Пути.** Всё, что смотрело в 2017.4-проект или редактор, смотрит в `Unity6Project` / 6000.6.5f1: `apply.sh`,
+  `webbuild.sh`, `modsmoke.sh`, `abtest.sh`, `variant_selection.py`, `bundle_names.py`, `audio/build_audio.py` (раньше
+  писал звук модов прямо в `ExportedProject`), `audio/audiodiff.py`, `open-gles30.ps1`; плеер и копии файлов —
+  в `webbuild6/` (`EtgWebBuild.PlayerOutput`, `webbuild.sh`, `apply.sh`, `site/install.py`). `monosigcheck.sh`
+  проверяет плагины `Unity6Project` старым Mono 2.x из `tools/unity-2017.4.27f1` (см. «Дальше»). Проверка «Unity
+  запущена» в скриптах — `port/unity_running.sh`: служба Unity Hub (`Unity Hub\resources\unity.exe serve`) больше
+  не считается редактором.
+- **Patcher** (`Patcher/Unity6.cs`): 9 типов, переехавших между модулями (`AssetBundle*` → AssetBundleModule,
+  `Input`/`Touch*`/`Gyroscope`/`DeviceOrientation` → InputLegacyModule, `AnalyticsSessionInfo` →
+  UnityAnalyticsModule); `PhysicMaterial(Combine)` → `PhysicsMaterial(Combine)`; `Camera.hdr` → `allowHDR`,
+  `Graphics.DrawProceduralIndirect(MeshTopology, ...)` → `DrawProceduralIndirectNow`, `Texture2D.Resize` →
+  `Reinitialize` (то, что сделал бы API Updater); `UnityEngine.Timeline` → `Unity.Timeline`; ссылки на модули,
+  на которые больше ничего не указывает, удаляются (иначе Updater переписывает DLL). `GUIText`/`GUITexture`/
+  `GUIElement`/`GUILayer` → стабы в `WebShim/UnityStubs.cs` (наследники `Behaviour`, PlayMaker
+  `ComponentAction<T>` грузится). `TextEditor.content` (в 6.6 бросает `NotImplementedException`; это SGUI, консоль
+  MtG API на F2) → `WebShim.ImguiShim.GetContent`. В `Targets` добавлены `Unity.Analytics.DataPrivacy` (переезд
+  типа), `Boo.Lang` и `UnityScript.Lang` (2017.4 давал их сам, 6.6 — нет).
+- **`Patcher verify`**: пути 6.6 (`Variations/il2cpp/Managed`, `unityaot-win32` + `Facades`,
+  `Library/ScriptAssemblies` проекта для UGUI/Timeline — до первого открытия проекта `verify` пропускается) и новая
+  проверка: члены движка с `[Obsolete(error)]` (часть — заглушки, бросающие исключение или возвращающие null).
+  Она нашла `TextEditor.content` (выше) и `SystemInfo.supportsStencil` (возвращает 1, в списке рабочих вместе с
+  `Object.GetInstanceID`). Итог с модами: **All references resolve.**
+- **WebShim и ModFacades** собираются под `net472` против WebGL-модулей 6.6 (`UnityEditorData` из `apply.sh`).
+  `BootLoader` → `UnityWebRequestAssetBundle.GetAssetBundle` и `result`; `GetInstanceID()` (ошибка компиляции) →
+  `EntityId.ToULong(GetEntityId())` в WwiseShim; заглушка бандла в BundleShim копирует `m_EntityId` якоря (поля
+  `m_InstanceID` в 6.6 нет).
+- **`port/unity_plugins.py`** (из `apply.sh`): у всех `Assets/Plugins/*.dll` Auto Reference выключен, `.meta` без
+  импортёра получают его с фиксированным GUID; оба наших asmdef перечисляют плагины в `precompiledReferences`.
+- **Редакторные скрипты.** `EtgWebBuild`: `NamedBuildTarget`, API level `.NET Framework` (`NET_Unity_4_8`), куча
+  512 → 4096 МБ (wasm32, рост Geometric), `emscriptenArgs` очищен, `BuildReport` вместо строки, удаление asm.js
+  убрано. Play From Boot больше не зовёт Graphics Emulation. **`EtgFullInspector`** — см. ниже.
+- **jslib**: `UTF8ToString`, `__sig: 'vp'` / `'iip'`, индексы кучи через `ptrToIdx` (Unity
+  `BuildTools/lib/AA_Wasm64Support.js`), `__deps` на `$FS` / `$UTF8ToString`. В браузере ещё не проверено.
+
+### Находка: импорт в 6.6 пересохраняет данные FullInspector
+
+Unity 6 импортирует префаб, загружая и заново сериализуя его, а FullInspector на каждый `OnBeforeSerialize` делает
+`SaveState()` — переписывает свои строки (`_serializedStateValues` + `_objectReferences`) из полей, которые сам
+восстановил. Если восстановление при импорте не удалось, в результат импорта (Library, а из него — бандлы) уходят
+испорченные данные. Так было при первом импорте у 15 объектов: ссылка на ещё не загруженный префаб приходит как
+голый `UnityEngine.Object`, FullSerializer не может присвоить его полю `GameObject` (`ArgumentException`). Врагам
+(`BehaviorSpeculator`: GatlingGull, Beholster, Jamerlengo...) помог повторный импорт, а `BossStatues.prefab`
+(`BossStatueController.levelData`, следы глаз статуй) терял данные при каждом импорте: в Library было 4 ссылки
+вместо 8. Логи `GetInternalActivePlatformGuid` / `ToString is not allowed to be called during serialization` —
+вторичные: это Unity падает, когда логирует то исключение FullSerializer во время сериализации.
+
+Причина сбоя — не порядок импорта: пустой элемент `{fileID: 0}` в `List<UnityEngine.Object>` редактор 6.6 отдаёт
+не как `null`, а как «fake null» объект типа `UnityEngine.Object` (у `BossStatueController` индекс 0 — пустой).
+Проба показала, что `RestoreState()` и вне импорта падает так же, то есть в Play Mode тоже.
+
+Исправления:
+- `Editor/EtgWebBuild/EtgFullInspector.cs` вне Play Mode ставит `fiSerializationManager.DisableAutomaticSerialization
+  = true` (порт данные FullInspector не редактирует): импорт, бандлы и сборка несут исходные строки. В Play Mode
+  флаг выключен: `Instantiate` полагается на `SaveState`, чтобы клон получил живое состояние.
+- Патчер (`NormalizedUnityNullReturns`): результат `ListSerializationOperator.RetrieveObjectReference` проходит через
+  `WebShim.UnityNull.Normalize` (fake null → `null`). В плеере там и так настоящий `null`.
+
+### Чистый импорт (`port/build/u6/import4.log`, Library с нуля, с модами)
+
+Код 0, 100 с на Asset Pipeline Refresh. **0 ошибок компиляции**, ни одна сборка не выгружена как «broken»,
+0 `Invalid generic instantiation`, 0 исключений FullInspector / FullSerializer (в spike: ~10 000), нет дублей
+Newtonsoft; у четырёх статуй после `RestoreState` по 4 записи `levelData`. Осталось:
+
+| Сообщение | Сколько | Что это |
+|---|---|---|
+| `GetAllAssetBundleNames is not allowed to be called from a MonoBehaviour constructor` | 66 | Конструкторы компонентов Expand зовут симуляцию бандлов (см. «Дальше», п. 1); на данные импорта не влияет |
+| `Component at index N could not be loaded ... Removing it` | 109 | `GUILayer` (class 92) на камерах — компонента больше нет, удаление безвредно |
+| `below the supported minimum` | 6 499 | старый формат сериализации, Unity апгрейдит при импорте |
+| `Unable to update ... EtgGame.dll (Error = 131)` | 1 | API Updater на пустом Library: `UnityEngine.UI` ещё не скомпилирован. Остальным DLL обновлять нечего (Result = 0); на втором открытии ошибки нет |
+| `Shader error in '': Parse error ... line 9` | 1 | как в spike: шейдер без имени, похоже, создаётся из строки кодом редактора; не разобрано |
+
+### Первый Play From Boot (2026-10-18)
+
+Пользователь прошёл Play From Boot с модами через `open-gles30.ps1` (GLES 3.2, AMD RX 9070): по словам
+пользователя, всё работает. **Лог редактора в 6.6 — `ripped/Unity6Project/Logs/Editor.log`**, а не
+`%LOCALAPPDATA%\Unity\Editor\Editor.log` (там только начало запуска).
+
+- **Голубой флик** (на кадр, один раз — например, при первом открытии паузы): асинхронная компиляция шейдеров
+  редактора (с 2019.3). Вариант, которого редактор ещё не компилировал, рисуется голубой заглушкой, пока
+  `UnityShaderCompiler.exe` его собирает (в логе запуски компилятора посреди игры). В плеере все варианты собраны
+  заранее, флика нет. `EtgWebPlayMode` теперь выключает `EditorSettings.asyncShaderCompilation`: редактор ждёт
+  компиляцию, как 2017.4 (короткая пауза вместо голубого кадра). Заодно заглушка не попадёт в кадры abtest /
+  variant-selection.
+- Ошибки в конструкторах компонентов модов: `GetAssetPathsFromAssetBundle` (66×), `LoadAssetAtPath` (41×),
+  `ScriptableObject.ctor` (1×) are not allowed to be called from a MonoBehaviour constructor; за ними — NRE в
+  `OnGameManagerStart` консоли MtG. См. п. 1.
+- `[WebShim] Simulated bundle ... has no GameObject named barrel_collection` и т. п. — десятки тысяч предупреждений
+  (Expand ищет объекты по нескольким бандлам). Было ли так в 2017.4 — не сравнивал (логов 2017.4 не сохранилось).
+
+### Дальше
+
+1. **Конструкторы и симуляция бандлов в Play Mode.** Unity 6 запрещает `AssetDatabase.*` в конструкторах
+   MonoBehaviour, а конструкторы компонентов Expand зовут симуляцию бандлов (`ExpandExplodeOnDeath..ctor` →
+   `ResourceManager.LoadAssetBundle` → `BundleShim`; при импорте 66× `GetAllAssetBundleNames`). Нужен список
+   бандлов и путей, посчитанный заранее (редактором перед Play Mode), а `LoadAssetAtPath` из конструктора — отложить
+   или отказаться. Заглушка бандла (`m_EntityId`) в первом прогоне ошибок не дала.
+2. `modsmoke.sh` в Play Mode. `monosigcheck.sh` ловил падение Mono 2.x редактора 2017.4; в 6.6 редактор на
+   MonoBleedingEdge — проверить, нужен ли он (пока проверяет старым Mono).
+3. abtest / variant-selection без Graphics Emulation (`EtgAbTest` выходит с кодом 3 без `-abEmulation none`,
+   `EtgVariantSelection` зовёт пункт меню), `shaderdiff.sh` берёт CGIncludes 2017.4.
+4. Бандлы (EtG Web → 3), Always Included шейдеры, правки `fix_shaders.py` (LPPV на GLES).
+5. Страница (`createUnityInstance`, путь IDBFS для сохранений), `ModBaker resources` (кладёт ли 6.6
+   `*-resources.dat` сам), `serve-webbuild.ps1` (отдаёт `webbuild/`).
+6. Первая dev-сборка в `webbuild6/`, `?smoketest`.
 
 ## Зачем
 

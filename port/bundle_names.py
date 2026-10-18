@@ -24,7 +24,7 @@ import UnityPy
 PORT = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(PORT)
 ORIGINAL = os.path.join(ROOT, "ripped", "_removed", "StreamingAssets_Assets")
-PROJECT = os.path.join(ROOT, "ripped", "ExportedProject")
+PROJECT = os.path.join(ROOT, "ripped", "Unity6Project")
 OUT = os.path.join(PORT, "bundle_renames.tsv")
 SANITIZED = str.maketrans({",": "_"})
 

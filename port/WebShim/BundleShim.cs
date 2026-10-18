@@ -228,10 +228,12 @@ namespace WebShim
             }
             AssetBundle bundle = (AssetBundle)FormatterServices.GetUninitializedObject(typeof(AssetBundle));
             GameObject anchor = new GameObject("[WebShim] simulated bundle " + name) { hideFlags = HideFlags.HideAndDontSave };
-            FieldInfo instanceId = typeof(UnityEngine.Object).GetField("m_InstanceID", BindingFlags.Instance | BindingFlags.NonPublic);
-            if (instanceId != null)
+            // The editor's Object keeps its id in m_EntityId; with no native pointer, == null asks whether an object with
+            // that id exists.
+            FieldInfo entityId = typeof(UnityEngine.Object).GetField("m_EntityId", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (entityId != null)
             {
-                instanceId.SetValue(bundle, anchor.GetInstanceID());
+                entityId.SetValue(bundle, entityId.GetValue(anchor));
             }
             s_placeholders[bundle] = name;
             return bundle;

@@ -5,7 +5,8 @@
     <AssemblyVersion>5.4.21.0</AssemblyVersion>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="UnityEngine.CoreModule"><HintPath>$(GameManaged)UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.CoreModule"><HintPath>$(UnityManaged)UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(UnityManaged)UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
     <ProjectReference Include="..\..\WebShim\WebShim.csproj" Private="false" />
   </ItemGroup>
 </Project>
