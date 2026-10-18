@@ -35,6 +35,7 @@ namespace WebShim
                 // Editor Play Mode: nothing to download, assets come straight from the project.
                 // LoadFromFile registers a placeholder per bundle (which == calls null, so check
                 // registration instead).
+                BundleShim.StartSimulation();
                 string[] all = BundleShim.AllBundles;
                 for (int i = 0; i < all.Length; i++)
                 {

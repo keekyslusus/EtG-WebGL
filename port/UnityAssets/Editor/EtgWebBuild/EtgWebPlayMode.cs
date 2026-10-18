@@ -25,6 +25,7 @@ public static class EtgWebPlayMode
             EditorSettings.asyncShaderCompilation = false;
         }
         WebShim.BundleShim.Simulation = Simulate;
+        WebShim.BundleShim.SimulationStarting = PreloadForConstructors;
         EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
     }
 
@@ -80,10 +81,52 @@ public static class EtgWebPlayMode
         {
             AddBundleScenesToBuildSettings();
         }
+        else if (state == PlayModeStateChange.ExitingPlayMode)
+        {
+            WebShim.BundleShim.StopSimulation();
+        }
         else if (state == PlayModeStateChange.EnteredEditMode)
         {
             RemoveBundleScenesFromBuildSettings();
         }
+    }
+
+    // Assets mods load in MonoBehaviour constructors, where Unity 6's editor refuses AssetDatabase (BundleShim,
+    // "Simulation"): the ones listed next to this script, plus what BundleShim logged as refused in earlier sessions.
+    // BootLoader calls this (BundleShim.StartSimulation) before the game loads anything.
+    private const string PreloadList = "Assets/Editor/EtgWebBuild/PlayModePreload.txt";
+    private const string RefusedList = "Library/EtgWeb/PlayModePreload.txt";
+
+    private static void PreloadForConstructors()
+    {
+        WebShim.BundleShim.PrepareSimulation(System.IO.Path.GetFullPath(RefusedList));
+        int loaded = 0, listed = 0;
+        foreach (string file in new[] { PreloadList, RefusedList })
+        {
+            if (!System.IO.File.Exists(file))
+            {
+                continue;
+            }
+            foreach (string line in System.IO.File.ReadAllLines(file))
+            {
+                string[] parts = line.Split('\t');
+                if (parts.Length != 3 || line.StartsWith("#"))
+                {
+                    continue;
+                }
+                listed++;
+                System.Type type = System.Type.GetType(parts[2]);
+                if (type != null && WebShim.BundleShim.Preload(parts[0], parts[1], type))
+                {
+                    loaded++;
+                }
+                else
+                {
+                    Debug.LogWarning("[EtG Web] Play Mode preload failed: " + line.Replace('\t', ' '));
+                }
+            }
+        }
+        Debug.Log("[EtG Web] Play Mode: bundle index ready, " + loaded + " of " + listed + " assets preloaded for mod constructors");
     }
 
     // The game loads tt_foyer/Foyer/tt6 by path (from GetAllScenePaths) and by name; in the player

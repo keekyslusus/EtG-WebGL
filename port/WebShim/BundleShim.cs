@@ -221,12 +221,18 @@ namespace WebShim
 
         private static AssetBundle CreatePlaceholder(string name)
         {
+            AssetBundle bundle = (AssetBundle)FormatterServices.GetUninitializedObject(typeof(AssetBundle));
+            if (!s_playing)
+            {
+                // Outside Play Mode only an import runs a mod component's constructor; it gets nothing (SimulatedLoad).
+                s_placeholders[bundle] = name;
+                return bundle;
+            }
             if (Array.IndexOf(EditorAssets.AllBundleNames(), name) < 0)
             {
                 Debug.LogError("[WebShim] No assets are tagged with bundle " + name + " - nothing to simulate");
                 return null;
             }
-            AssetBundle bundle = (AssetBundle)FormatterServices.GetUninitializedObject(typeof(AssetBundle));
             GameObject anchor = new GameObject("[WebShim] simulated bundle " + name) { hideFlags = HideFlags.HideAndDontSave };
             // The editor's Object keeps its id in m_EntityId; with no native pointer, == null asks whether an object with
             // that id exists.
@@ -239,7 +245,113 @@ namespace WebShim
             return bundle;
         }
 
+        // Unity 6's editor refuses AssetDatabase calls in a MonoBehaviour constructor or field initializer, and mods
+        // load assets there (Expand's ExpandExplodeOnDeath, ExpandWallMimicManager, PortableShip...); a bundle in the
+        // player answers them. So the editor indexes every simulated bundle and preloads what constructors ask for
+        // when Play Mode starts (EtgWebPlayMode: PlayModePreload.txt + what this class logged as refused before).
+        private static readonly Dictionary<string, UnityEngine.Object> s_preloaded = new Dictionary<string, UnityEngine.Object>();
+        private static readonly HashSet<string> s_refused = new HashSet<string>();
+        private static string s_refusedFile;
+
+        /// <summary>Set by the editor (EtgWebPlayMode): prepares the simulation, see <see cref="StartSimulation"/>.</summary>
+        public static Action SimulationStarting;
+
+        // Play Mode with the simulation started. Not Application.isPlaying: constructors may not ask that either.
+        private static bool s_playing;
+
+        /// <summary>Editor, leaving Play Mode (statics survive it): constructors run by the editor get nothing again.</summary>
+        public static void StopSimulation()
+        {
+            s_playing = false;
+        }
+
+        /// <summary>BootLoader, Play Mode: before the game asks for anything (a safe place for AssetDatabase).</summary>
+        public static void StartSimulation()
+        {
+            s_playing = true;
+            if (SimulationStarting != null)
+            {
+                SimulationStarting();
+            }
+        }
+
+        /// <summary>Editor, Play Mode: indexes every bundle; loads a constructor couldn't do are appended to refusedFile.</summary>
+        public static void PrepareSimulation(string refusedFile)
+        {
+            s_refusedFile = refusedFile;
+            if (System.IO.File.Exists(refusedFile))
+            {
+                foreach (string line in System.IO.File.ReadAllLines(refusedFile))
+                {
+                    s_refused.Add(line);
+                }
+            }
+            foreach (string name in EditorAssets.AllBundleNames())
+            {
+                EditorAssets.PathsInBundle(name);
+                // A placeholder's anchor is a new GameObject, which a constructor can't make either.
+                if (!s_bundles.ContainsKey(name))
+                {
+                    AssetBundle bundle = CreatePlaceholder(name);
+                    if ((object)bundle != null)
+                    {
+                        s_bundles[name] = bundle;
+                    }
+                }
+            }
+        }
+
+        /// <summary>Editor, Play Mode: loads an asset now, for a constructor that asks for it later.</summary>
+        public static bool Preload(string bundleName, string assetName, Type type)
+        {
+            UnityEngine.Object asset = SimulatedLoad(Normalize(bundleName), assetName, type);
+            if (asset == null)
+            {
+                return false;
+            }
+            s_preloaded[PreloadKey(Normalize(bundleName), assetName, type)] = asset;
+            return true;
+        }
+
+        private static string PreloadKey(string bundleName, string assetName, Type type)
+        {
+            return bundleName + "\t" + assetName + "\t" + type.FullName + ", " + type.Assembly.GetName().Name;
+        }
+
         private static UnityEngine.Object SimulatedLoad(string bundleName, string assetName, Type type)
+        {
+            if (!s_playing)
+            {
+                return null; // an import running a mod component's constructor
+            }
+            UnityEngine.Object preloaded;
+            if (s_preloaded.TryGetValue(PreloadKey(bundleName, assetName, type), out preloaded) && preloaded != null)
+            {
+                return preloaded;
+            }
+            try
+            {
+                return SimulatedLoadNow(bundleName, assetName, type);
+            }
+            catch (UnityException e) when (e.Message.Contains("MonoBehaviour constructor"))
+            {
+                string key = PreloadKey(bundleName, assetName, type);
+                if (s_refused.Add(key))
+                {
+                    if (s_refusedFile != null)
+                    {
+                        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(s_refusedFile));
+                        System.IO.File.AppendAllText(s_refusedFile, key + "\n");
+                    }
+                    Debug.LogWarning("[WebShim] Play Mode: " + bundleName + " / " + assetName + " (" + type.Name
+                        + ") is loaded from a MonoBehaviour constructor, where the editor refuses AssetDatabase; "
+                        + "it is preloaded from the next Play Mode on (" + s_refusedFile + ")");
+                }
+                return null;
+            }
+        }
+
+        private static UnityEngine.Object SimulatedLoadNow(string bundleName, string assetName, Type type)
         {
             Dictionary<string, List<string>> index;
             if (!s_simIndex.TryGetValue(bundleName, out index))
@@ -337,13 +449,22 @@ namespace WebShim
             private static Func<string, Type, UnityEngine.Object> s_loadAssetAtPath;
             private static Func<string[]> s_allBundleNames;
 
+            // Bundle contents don't change during Play Mode; cached so constructors (PrepareSimulation) don't need the editor.
+            private static readonly Dictionary<string, string[]> s_paths = new Dictionary<string, string[]>();
+            private static string[] s_allNames;
+
             public static string[] PathsInBundle(string bundleName)
             {
+                string[] paths;
+                if (s_paths.TryGetValue(bundleName, out paths))
+                {
+                    return paths;
+                }
                 if (s_pathsInBundle == null)
                 {
                     s_pathsInBundle = Bind<Func<string, string[]>>("GetAssetPathsFromAssetBundle", typeof(string));
                 }
-                return s_pathsInBundle(bundleName);
+                return s_paths[bundleName] = s_pathsInBundle(bundleName);
             }
 
             public static UnityEngine.Object LoadAssetAtPath(string path, Type type)
@@ -357,11 +478,15 @@ namespace WebShim
 
             public static string[] AllBundleNames()
             {
+                if (s_allNames != null)
+                {
+                    return s_allNames;
+                }
                 if (s_allBundleNames == null)
                 {
                     s_allBundleNames = Bind<Func<string[]>>("GetAllAssetBundleNames");
                 }
-                return s_allBundleNames();
+                return s_allNames = s_allBundleNames();
             }
 
             private static TDelegate Bind<TDelegate>(string method, params Type[] parameters) where TDelegate : class

@@ -1,0 +1,8 @@
+# Assets mods load from bundles in MonoBehaviour constructors, preloaded when Play Mode starts (EtgWebPlayMode):
+# Unity 6's editor refuses AssetDatabase there. <bundle> TAB <asset name as the mod asks for it> TAB <type, assembly>.
+# BundleShim appends new refusals to Library/EtgWeb/PlayModePreload.txt; move them here to keep them.
+shared_auto_001	VFX_Ring_Explosion_001	UnityEngine.GameObject, UnityEngine.CoreModule
+shared_auto_001	VFX_Dust_Explosion	UnityEngine.GameObject, UnityEngine.CoreModule
+brave_resources_001	EmergencyCrate	UnityEngine.GameObject, UnityEngine.CoreModule
+brave_resources_001	assets/ResourcesBundle/PlayerRogueShip.prefab	UnityEngine.GameObject, UnityEngine.CoreModule
+brave_resources_001	assets/ResourcesBundle/PlayerCoopShip.prefab	UnityEngine.GameObject, UnityEngine.CoreModule

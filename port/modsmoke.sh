@@ -17,7 +17,8 @@ PORT="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$PORT")"
 UNITY="${UNITY_EXE:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Unity.exe}"
 PROJECT="$(cygpath -w "$ROOT/ripped/Unity6Project")"
-LOG="$LOCALAPPDATA/Unity/Editor/Editor.log"
+# Where Unity 6 puts the editor log depends on how it was started (%LOCALAPPDATA%, or the project's Logs/): name it.
+LOG="$ROOT/port/build/modsmoke/editor.log"
 OUT="$ROOT/port/build/modsmoke"
 
 unity_running() { bash "$PORT/unity_running.sh"; }
@@ -28,8 +29,10 @@ if unity_running; then
 fi
 mkdir -p "$OUT"
 # A plugin method that aborts the editor's Mono on reflection would crash the editor on the first exception
-# stack trace through it (~7 s, port/monosigcheck.sh).
-if ! bash "$PORT/monosigcheck.sh" > "$OUT/monosigcheck.log" 2>&1; then
+# stack trace through it (~7 s, port/monosigcheck.sh). That was Unity 2017.4's Mono 2.x; Unity 6's editor runs
+# MonoBleedingEdge, and the old Mono can't load the plugins patched for 6.6 (their types live in 6.6's modules), so
+# the check is off until it runs against 6.6's Mono (MONOSIGCHECK=1 forces it).
+if [ "${MONOSIGCHECK:-0}" = 1 ] && ! bash "$PORT/monosigcheck.sh" > "$OUT/monosigcheck.log" 2>&1; then
     echo "Methods in Assets/Plugins crash the editor's Mono (see $OUT/monosigcheck.log):" >&2
     grep "^CRASH" "$OUT/monosigcheck.log" | sort -u >&2
     exit 1
@@ -44,7 +47,7 @@ while [ "$failures" -lt "$MAX_ATTEMPTS" ]; do
     # the script that is (not in Temp/: the editor clears that on startup).
     printf '%s\n1\n' "$PHASES" > "$OUT/request"
     echo "== Mod smoke test ($PHASES), attempt $attempt, Unity -force-gles30, log: $LOG"
-    "$UNITY" -projectPath "$PROJECT" -force-gles30 &
+    "$UNITY" -projectPath "$PROJECT" -force-gles30 -logFile "$(cygpath -w "$LOG")" &
     sleep 20
     last_size=-1
     quiet=0

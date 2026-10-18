@@ -17,6 +17,36 @@ from pathlib import Path
 
 ASMDEFS = ["Editor/EtgWebBuild/EtgWebBuild.asmdef", "EtgModSmoke/EtgModSmoke.asmdef"]
 
+# The importer block Unity 6 writes for a plugin, Auto Reference off. A shorter one (serializedVersion 1) makes Unity
+# warn "below the supported minimum" and re-import the plugins on later script reloads, which can leave the editor's
+# script domain broken (EditorApplication bindings, engine modules failing to load).
+PLUGIN_IMPORTER = """PluginImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  iconMap: {}
+  executionOrder: {}
+  defineConstraints: []
+  isPreloaded: 0
+  isOverridable: 0
+  isExplicitlyReferenced: 1
+  validateReferences: 1
+  platformData:
+  - first:
+      Any:
+    second:
+      enabled: 1
+      settings: {}
+  - first:
+      Editor: Editor
+    second:
+      enabled: 0
+      settings:
+        DefaultValueInitialized: true
+  userData:
+  assetBundleName:
+  assetBundleVariant:
+"""
+
 
 def plugin_meta(meta: Path, dll_name: str) -> bool:
     if meta.exists():
@@ -24,15 +54,16 @@ def plugin_meta(meta: Path, dll_name: str) -> bool:
     else:
         guid = hashlib.md5(("etgmod:" + dll_name).encode()).hexdigest()
         text = f"fileFormatVersion: 2\nguid: {guid}\n"
-    if re.search(r"^  isExplicitlyReferenced: 1$", text, re.M):
+    if not re.search(r"^  serializedVersion: 2$", text, re.M):
+        # No importer block, or a stub: write Unity 6's whole block.
+        header = re.match(r"fileFormatVersion: \d+\nguid: [0-9a-f]+\n", text)
+        text = header.group(0) + PLUGIN_IMPORTER
+    elif re.search(r"^  isExplicitlyReferenced: 1$", text, re.M):
         return False
-    if re.search(r"^  isExplicitlyReferenced: \d$", text, re.M):
+    elif re.search(r"^  isExplicitlyReferenced: \d$", text, re.M):
         text = re.sub(r"^  isExplicitlyReferenced: \d$", "  isExplicitlyReferenced: 1", text, flags=re.M)
-    elif re.search(r"^PluginImporter:$", text, re.M):
-        text = re.sub(r"^PluginImporter:\n", "PluginImporter:\n  isExplicitlyReferenced: 1\n", text, count=1, flags=re.M)
     else:
-        # Unity fills in the rest of the importer settings.
-        text = text.rstrip("\n") + "\nPluginImporter:\n  isExplicitlyReferenced: 1\n"
+        text = re.sub(r"^PluginImporter:\n", "PluginImporter:\n  isExplicitlyReferenced: 1\n", text, count=1, flags=re.M)
     meta.write_text(text, encoding="utf-8", newline="\n")
     return True
 
