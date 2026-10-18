@@ -29,10 +29,8 @@ if unity_running; then
 fi
 mkdir -p "$OUT"
 # A plugin method that aborts the editor's Mono on reflection would crash the editor on the first exception
-# stack trace through it (~7 s, port/monosigcheck.sh). That was Unity 2017.4's Mono 2.x; Unity 6's editor runs
-# MonoBleedingEdge, and the old Mono can't load the plugins patched for 6.6 (their types live in 6.6's modules), so
-# the check is off until it runs against 6.6's Mono (MONOSIGCHECK=1 forces it).
-if [ "${MONOSIGCHECK:-0}" = 1 ] && ! bash "$PORT/monosigcheck.sh" > "$OUT/monosigcheck.log" 2>&1; then
+# stack trace through it (~5 s, port/monosigcheck.sh, under 6.6's MonoBleedingEdge; MONOSIGCHECK=0 skips it).
+if [ "${MONOSIGCHECK:-1}" = 1 ] && ! bash "$PORT/monosigcheck.sh" > "$OUT/monosigcheck.log" 2>&1; then
     echo "Methods in Assets/Plugins crash the editor's Mono (see $OUT/monosigcheck.log):" >&2
     grep "^CRASH" "$OUT/monosigcheck.log" | sort -u >&2
     exit 1

@@ -1,25 +1,28 @@
 #!/usr/bin/env bash
-# Reflects over every method of the patched / mod-baked DLLs in Assets/Plugins with the editor's own Mono 2.x
-# (port/MonoSigCheck). A method whose GetParameters() aborts Mono would crash the editor as soon as it shows up
-# in an exception's stack trace. Crashed methods are reported and skipped, then the run continues.
+# Reflects over every method of the patched / mod-baked DLLs in Assets/Plugins with the editor's own Mono
+# (port/MonoSigCheck; Unity 6.6's MonoBleedingEdge, unityjit profile like the editor's domain). A method whose
+# GetParameters() aborts Mono would crash the editor as soon as it shows up in an exception's stack trace (that
+# was Mono 2.x of Unity 2017.4). Crashed methods are reported and skipped, then the run continues.
 #
 # Usage: bash port/monosigcheck.sh [dll...]   (default: every DLL in Assets/Plugins)
 set -u
 PORT="$(cd "$(dirname "$0")" && pwd)"
 ETG="$(dirname "$PORT")"
-DATA="$ETG/tools/unity-2017.4.27f1/Editor/Data"
-PLUGINS="$ETG/ripped/Unity6Project/Assets/Plugins"
+DATA="${UNITY_DATA:-/c/Program Files/Unity/Hub/Editor/6000.6.5f1/Editor/Data}"
+PROJECT="$ETG/ripped/Unity6Project"
+PLUGINS="$PROJECT/Assets/Plugins"
 OUT="$PORT/build/monosigcheck"
 mkdir -p "$OUT"
 
 w() { cygpath -w "$1"; }
 
-export MONO_CFG_DIR="$(w "$DATA/Mono/etc")"
-export MONO_PATH="$(w "$DATA/Mono/lib/mono/2.0");$(w "$DATA/Managed");$(w "$DATA/Managed/UnityEngine");$(w "$DATA/UnityExtensions/Unity/GUISystem");$(w "$DATA/UnityExtensions/Unity/Timeline/Runtime");$(w "$DATA/UnityExtensions/Unity/Networking")"
-MONO="$DATA/Mono/bin/mono.exe"
+MBE="$DATA/MonoBleedingEdge"
+export MONO_CFG_DIR="$(w "$MBE/etc")"
+# UnityEngine.UI / Timeline are packages in 6.6: the editor compiles them into Library/ScriptAssemblies
+export MONO_PATH="$(w "$MBE/lib/mono/unityjit-win32");$(w "$MBE/lib/mono/unityjit-win32/Facades");$(w "$DATA/Managed");$(w "$DATA/Managed/UnityEngine");$(w "$PROJECT/Library/ScriptAssemblies")"
+MONO="$MBE/bin/mono.exe"
 
-"$MONO" "$(w "$DATA/Mono/lib/mono/2.0/gmcs.exe")" -nologo -out:"$(w "$OUT/MonoSigCheck.exe")" \
-    "$(w "$PORT/MonoSigCheck/MonoSigCheck.cs")" || exit 1
+"$MONO" "$(w "$MBE/lib/mono/4.5/mcs.exe")" -nologo -sdk:4.5 -out:"$(w "$OUT/MonoSigCheck.exe")"     "$(w "$PORT/MonoSigCheck/MonoSigCheck.cs")" || exit 1
 
 if [ $# -gt 0 ]; then dlls=("$@"); else dlls=("$PLUGINS"/*.dll); fi
 args=()

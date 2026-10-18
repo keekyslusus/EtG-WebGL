@@ -280,8 +280,8 @@ ApacheThunder's Expand the Gungeon 3.0.8 brings three Windows AssetBundles (`exp
   `Custom_Glitch_Flow`.
 - `Patcher verify` also fails on a branch whose target isn't an instruction (a short branch overflowed by inserted code
   crashes il2cpp after 20 minutes) and on a parameter with HasDefault but no Constant (the editor's Mono aborts in
-  `GetParameters()` on any stack trace through it). `bash port/monosigcheck.sh` checks the latter with the real Mono
-  (`port/MonoSigCheck`, ~7 s).
+  `GetParameters()` on any stack trace through it; seen with 2017.4's Mono 2.x). `bash port/monosigcheck.sh` checks the
+  latter with the editor's own Mono (6.6's MonoBleedingEdge, `port/MonoSigCheck`, ~5 s).
 
 ### Smoke test (EtG Web -> Mod Smoke Test)
 

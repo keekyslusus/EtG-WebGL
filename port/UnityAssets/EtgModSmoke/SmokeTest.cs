@@ -967,10 +967,13 @@ namespace EtgModSmoke
         {
             PlayerController p = Player;
             BaseShopController shop = null;
-            // the shop room's objects can be inactive while the player is elsewhere: look through those too
+            // the shop room's objects can be inactive while the player is elsewhere: look through those too. Only a
+            // placed shop has its room (m_room): mods keep "fake prefab" shops in DontDestroyOnLoad, a valid scene too,
+            // and Unity 6.6 lists them first (PurchaseItem -> m_room.DeregisterInteractable NRE)
             foreach (BaseShopController c in Resources.FindObjectsOfTypeAll<BaseShopController>())
             {
-                if (c != null && c.gameObject.scene.IsValid() && c.baseShopType == BaseShopController.AdditionalShopType.NONE)
+                if (c != null && c.gameObject.scene.IsValid() && c.baseShopType == BaseShopController.AdditionalShopType.NONE
+                    && InstanceMember(c, "m_room") != null)
                 {
                     shop = c;
                     break;

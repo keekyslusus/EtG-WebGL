@@ -259,6 +259,10 @@ namespace WebShim
         // Play Mode with the simulation started. Not Application.isPlaying: constructors may not ask that either.
         private static bool s_playing;
 
+        // Misses already logged this Play Mode. A real bundle's LoadAsset returns null silently, and mods probe several
+        // bundles per name (Alexandria's room placeables): ~67,000 warnings in a full smoke test, ~1,800 different.
+        private static readonly HashSet<string> s_missingLogged = new HashSet<string>();
+
         /// <summary>Editor, leaving Play Mode (statics survive it): constructors run by the editor get nothing again.</summary>
         public static void StopSimulation()
         {
@@ -269,6 +273,7 @@ namespace WebShim
         public static void StartSimulation()
         {
             s_playing = true;
+            s_missingLogged.Clear();
             if (SimulationStarting != null)
             {
                 SimulationStarting();
@@ -383,7 +388,11 @@ namespace WebShim
                     }
                 }
             }
-            Debug.LogWarning("[WebShim] Simulated bundle " + bundleName + " has no " + type.Name + " named " + assetName);
+            if (s_missingLogged.Add(PreloadKey(bundleName, assetName, type)))
+            {
+                Debug.LogWarning("[WebShim] Simulated bundle " + bundleName + " has no " + type.Name + " named " + assetName
+                    + " (logged once per Play Mode)");
+            }
             return null;
         }
 
