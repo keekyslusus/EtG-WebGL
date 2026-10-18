@@ -16,7 +16,7 @@ using UnityEngine;
 // (and does nothing) without them. Same C# 4 restrictions as the editor scripts.
 namespace EtgModSmoke
 {
-    public class SmokeTest : MonoBehaviour
+    public partial class SmokeTest : MonoBehaviour
     {
         public const string PhaseItems = "items";
         public const string PhaseShop = "shop";
@@ -184,6 +184,7 @@ namespace EtgModSmoke
 
         private void OnApplicationQuit()
         {
+            RestoreBatching();
             if (!m_finished)
             {
                 m_state = "aborted (Play Mode stopped)";
@@ -260,6 +261,11 @@ namespace EtgModSmoke
                 }
             }
 
+            if (m_phases.Contains(PhaseBatching))
+            {
+                StepResult batching = AddStep("perf", "batching", "Draw calls with dynamic batching on / off", null, null);
+                yield return StartCoroutine(RunStep(batching, BatchingTest(batching), 240f));
+            }
             foreach (StepResult s in items)
             {
                 yield return StartCoroutine(RunStep(s, ItemTest(s, itemObjects[s.Key]), 30f));
@@ -285,6 +291,7 @@ namespace EtgModSmoke
 
         private void Finish(string state)
         {
+            RestoreBatching();
             SmokeLog.Current = null;
             m_state = state;
             m_finished = true;

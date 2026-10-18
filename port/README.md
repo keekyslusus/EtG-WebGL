@@ -299,6 +299,10 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    the rest with their tileset); the player then warps into up to 12 non-boss rooms. A `diag` step lists Expand's room
    tables with entries the generator can't use.
 
+Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting
+enemies, dynamic batching is switched on and off through the player settings (restored after) and `UnityStats` draw
+calls are averaged per state (`port/tasks/unity6-migration.md`).
+
 Each step is cleaned up after (items, spawns, health, time scale, input); a lost run is restarted. Errors, exceptions
 and asserts from the log are counted per step, grouped by message + first frame. Steps time out (items 30 s, floors
 180 s). Categories by the top frames:
