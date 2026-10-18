@@ -15,3 +15,5 @@ port/**/obj/
 /port/audio/__pycache__
 /port/__pycache__/
 /port/mods/__pycache__/
+
+oalgo.md

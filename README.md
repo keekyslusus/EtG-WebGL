@@ -47,8 +47,8 @@ port/
 3. Shaders: AssetRipper writes stubs in their place (`DummyShaderTextExporter`), so
    clone [USCSandbox](https://github.com/nesrak1/USCSandbox) into `tools/src/USCSandbox`, check out the commit the
    patch was made against (`git checkout 044bc319866ca2f7a570942cb55d74458de7e2c0`), apply
-   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (fixes for the decompiler bugs listed under
-   *Shaders* below, plus the `--dump` mode), build it into `tools/uscs`
+   `git apply --ignore-whitespace port/patches/uscsandbox-fixes.patch` (fixes for the decompiler bugs listed in
+   `port/README.md`, *Shaders*, plus the `--dump` mode), build it into `tools/uscs`
    (`dotnet build -c Release -o tools/uscs` + `Files/classdata.tpk` next to the exe) and run
    `bash port/decompile_shaders.sh` — it decompiles the DX11 bytecode of all game shaders into `tools/uscs/out`
    (and dumps the original bytecode of every variant into `tools/uscs/dump` for `shaderdiff.sh`).
