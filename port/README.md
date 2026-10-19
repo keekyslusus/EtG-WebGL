@@ -290,9 +290,13 @@ resources), on Convict's frames; the past and the unlock come later.
   test's `breach` step checks every character's phases against the flag's library and screenshots each hold.
   `tools/extract_frames.py` cuts a collection into PNGs for reference.
 
-- **Ninth Inning** (`skb:ninth_inning`): a copy of gun 616, the nailed Casey that the #NAILBAT synergy ("Careful
-  Iteration": Casey + one of guns 26, 143 / items 457, 118) switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's
-  `MegaReflection`). 616's sprites; the Ammonomicon icon falls back to Casey's.
+- **Ninth Inning** (`skb:ninth_inning`): a kugibatto (wooden bat with nails, sarashi-wrapped grip). A copy of gun 616,
+  the nailed Casey that the #NAILBAT synergy ("Careful Iteration": Casey + one of guns 26, 143 / items 457, 118)
+  switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's `MegaReflection`). Sprites:
+  `tools/build_bat.py` recolors 616's 20 frames in place into `Resources/kugibatto_atlas.png` (the weapon atlas'
+  layout, the rest transparent); the gun gets copies of `WeaponCollection3` and its animation library whose materials
+  use it, so offsets, attach points and animations stay Casey's. The idle frame goes into the Ammonomicon's
+  collection as `ninth_inning_idle_001`.
 - **Koshien Dirt** (`skb:koshien_dirt`, active, 450 damage cooldown): pours a home base for 15 s, a flat sprite of
   3 x 1.5 tiles drawn like a landed supply crate (FG_Critical layer, Background sorting layer; on BG_Critical the floor
   sometimes covered it). Standing inside its ellipse multiplies `ChargeAmountMultiplier` by 2 (what `Gun` uses for
