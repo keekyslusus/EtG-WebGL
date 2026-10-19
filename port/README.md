@@ -266,8 +266,16 @@ the packages of `port/mods/modpack.txt` (plain `./apply.sh` takes them out again
 ### Sukeban (our character mod, `port/mods/Sukeban`)
 
 A playable character built on Alexandria's CharacterAPI (`Loader.BuildCharacter`, data and sprites as embedded
-resources). Convict's body for now (no sprites of her own yet: Alexandria then keeps the base character's); the past
-and the unlock come later.
+resources), on Convict's frames; the past and the unlock come later.
+
+- **Sprites**: `Character/playersheet.png` is Convict's atlas (512 x 1024) with every frame redrawn in place, so
+  Alexandria's sheet replacement keeps his UVs, offsets and animation library. (Its per-sprite replacement can't be
+  partial: it points the shared materials at the new page, breaking every frame not replaced.)
+  `tools/build_sheet.py` makes it from the ripped collection: all frames recolored to her palette; idle and run in
+  four directions (with the hand variants) and the dodges' upright / face-on frames get one of four drawn heads
+  (dark bob, design v4) placed by his eyes or hair, a cropped sailor top with scarf, a belt raised three rows and a
+  long skirt over the legs, geta. The rolling dodge frames and the rest (Breach idles, death, pitfall...) are only
+  recolored so far. `tools/extract_frames.py` cuts a collection into PNGs for reference.
 
 - **Ninth Inning** (`skb:ninth_inning`): a copy of gun 616, the nailed Casey that the #NAILBAT synergy ("Careful
   Iteration": Casey + one of guns 26, 143 / items 457, 118) switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's
