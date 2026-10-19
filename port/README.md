@@ -308,6 +308,12 @@ ApacheThunder's Expand the Gungeon 3.0.8 brings three Windows AssetBundles (`exp
   null and bounds checks (`FullWithoutStacktrace`, `EtgWebBuild.ApplyPlayerSettings`): with "explicitly thrown only"
   that call wrote through null and halted the player ("memory access out of bounds"). Builds write
   `Build/<name>.symbols.json` to name the `wasm-function[N]` frames of such a crash.
+- **Item notification in other languages** (Unity 6; `Patcher` `DetachBeforeDestroy`): Unity 6 disables the components of
+  everything under a GameObject at `Object.Destroy`, even what moves out before the frame ends.
+  `GameUIRoot.RemoveControlFromMotionGroups` (UpdateControlMotionGroup: the notification in Russian & co., hearts,
+  blanks) destroyed the old motion-group panel with the control still inside and re-enabled only the control, so the
+  pickup notification showed the item's sprite without box and texts. `WebShim.ModFixes.DestroyDetaching` moves the
+  control out first.
 - `Patcher verify` also fails on a branch whose target isn't an instruction (a short branch overflowed by inserted code
   crashes il2cpp after 20 minutes) and on a parameter with HasDefault but no Constant (the editor's Mono aborts in
   `GetParameters()` on any stack trace through it; seen with 2017.4's Mono 2.x). `bash port/monosigcheck.sh` checks the

@@ -172,6 +172,18 @@ internal static partial class Program
         ("ExpandTheGungeon.ExpandUtilities.ExpandUtility", "ApplyCustomTexture", "AIActor", "prebuiltCollection"),
     };
 
+    // Unity 6: the one `Object.Destroy(x)` in <Type>::<Method> becomes WebShim.ModFixes.DestroyDetaching(x, arg <KeepArgument>),
+    // which first moves that argument out of x. Unity 6 disables the components of everything under a GameObject at the
+    // Destroy call, even what is moved elsewhere before the frame ends (2017.4 didn't).
+    // - GameUIRoot.RemoveControlFromMotionGroups (via UpdateControlMotionGroup, from UINotificationController.SetWidths
+    //   in languages other than English / Japanese / Korean / Chinese) destroys a control's old motion-group panel while
+    //   the control is still inside it, then moves it to a new one and re-enables only the control: the item pickup
+    //   notification's box and texts stayed disabled, so in Russian only the item's sprite showed.
+    private static readonly (string Type, string Method, int KeepArgument)[] DetachBeforeDestroy =
+    {
+        ("GameUIRoot", "RemoveControlFromMotionGroups", 1),
+    };
+
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
     // errors where something IL2CPP-specific may go wrong. Logging only, behaviour unchanged.
     private static readonly (string Type, string Method)[] LogSwallowedExceptions =
@@ -462,6 +474,27 @@ internal static partial class Program
                 il.InsertBefore(call, il.Create(OpCodes.Call, clamp));
                 method.Body.OptimizeMacros();
                 report.Count($"sprite ID clamped to {collectionParameter}: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName, keepArgument) in DetachBeforeDestroy)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                var calls = method.Body.Instructions.Where(i => i.OpCode.Code is Code.Call or Code.Callvirt
+                    && i.Operand is MethodReference m && m.Name == "Destroy" && m.Parameters.Count == 1
+                    && m.DeclaringType.FullName == "UnityEngine.Object").ToList();
+                if (calls.Count != 1)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one Object.Destroy(Object), found {calls.Count}");
+                }
+                var helper = module.ImportReference(shim.Find("WebShim.ModFixes", "DestroyDetaching", ["UnityEngine.Object", "UnityEngine.Component"]));
+                method.Body.SimplifyMacros();
+                var il = method.Body.GetILProcessor();
+                il.InsertBefore(calls[0], il.Create(OpCodes.Ldarg, method.Parameters[keepArgument - (method.HasThis ? 1 : 0)]));
+                calls[0].OpCode = OpCodes.Call;
+                calls[0].Operand = helper;
+                method.Body.OptimizeMacros();
+                report.Count($"Destroy detaching argument {keepArgument}: {typeName}.{methodName}");
             }
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)
