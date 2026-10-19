@@ -168,6 +168,178 @@ DIRECTIONS = {
 FACING_FRONT = {"front", "front34"}
 # Dodges: the upright first and last frames get a head, and the crouch while the face shows; the roll is recolored.
 DODGE_ENDS = {"dodge": "front", "dodge_bw": "back", "dodge_left": "front34", "dodge_left_bw": "back34"}
+# The other clips: a head goes on the frames where he stands upright and faces as the clip says (two eyes for front
+# views, none for back views). Not spit_out (the Tarnisher spits him out lying down). The Breach's smoking and lighter idles keep his poses until hers are designed: the
+# lighter's flame has his hair's colors.
+OTHER_CLIPS = {
+    "item_get": "front34", "pet": "front34",
+    "tablekick_right": "front34", "tablekick_right_hand": "front34", "tablekick_right_twohands": "front34",
+    "tablekick_down": "front", "tablekick_down_hand": "front", "tablekick_down_twohands": "front",
+    "tablekick_up": "back", "tablekick_up_twohands": "back",
+    "pitfall_return": "front", "chest_recover": "front", "spinfall": "front",
+    # falling over: only while still facing us ("!": no back view instead)
+    "death": "front!", "death_shot": "front!", "death_coop": "front!",
+    "jetpack_down": "front", "jetpack_down_hand": "front", "jetpack_up": "back",
+    "jetpack_right": "front34", "jetpack_right_hand": "front34", "jetpack_right_bw": "back34",
+    "doorway": "back",
+    "select_idle": "front34", "select_wind": "front34", "select_wind_hair": "front34", "select_choose": "front34",
+    "select_crossarms": "front34", "select_crossarms_idle": "front34", "select_crossarms_out": "front34",
+    "select_crossarms_idle_kick": "front34", "select_trash": "front34",
+}
+BACK_OF = {"front": "back", "front34": "back34"}
+
+# His palette, for snapping the frames' slightly-off colors (compression noise) and the darkened ones (doorway).
+CONVICT = [C_HAIR, C_HAIR_SHADE, C_DARK, C_SHINE, C_HAIR_DARK2, C_SUIT, C_SUIT_DARK, C_MARK, C_SKIN, C_SKIN_SHADE,
+           C_EYE, C_BLACK]
+
+
+def best_match(rgb):
+    """(his color, brightness factor, error) closest to rgb as k * color."""
+    best = None
+    for c in CONVICT:
+        cc = sum(v * v for v in c)
+        k = sum(a * b for a, b in zip(rgb, c)) / cc if cc else 0.0
+        k = max(0.0, min(1.1, k))
+        err = sum((a - k * b) ** 2 for a, b in zip(rgb, c)) ** 0.5
+        if best is None or err < best[2]:
+            best = (c, k, err)
+    return best
+
+
+def nearest(rgb):
+    return min(CONVICT, key=lambda c: sum((x - y) ** 2 for x, y in zip(rgb, c)))
+
+
+def dist(a, b):
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
+
+
+def median(values):
+    values = sorted(values)
+    return values[len(values) // 2] if values else 0
+
+
+def normalize(im):
+    """(frame in his exact colors, how the frame's colors were shifted). Frames come darkened (the doorway fades
+    out: his color times k) or lit (petting: his color plus an offset); whichever fits better is undone here and
+    redone on her frame by shift()."""
+    px = [im.getpixel((x, y))[:3] for y in range(im.height) for x in range(im.width)
+          if im.getpixel((x, y))[3] and im.getpixel((x, y))[:3] != C_BLACK]
+    if not px:
+        return im, ("mul", 1.0)
+    # darkened: one factor for the whole frame (per pixel, a darkened yellow passes for his dark brown)
+    k = median([best_match(c)[1] for c in px if best_match(c)[2] < 24]) or 1.0
+    if k <= 0.97:
+        def cost(f):
+            return sum(min(40.0, min(dist(c, tuple(f * v for v in pc)) for pc in CONVICT)) for c in px)
+        k = min((f / 50 for f in range(5, 50)), key=cost)
+    k = 1.0 if k > 0.97 else k
+    err_mul = median([dist(tuple(v / k for v in c), nearest(tuple(v / k for v in c))) for c in px])
+    # lit: one offset per channel
+    o = (0, 0, 0)
+    for _ in range(3):
+        diffs = [tuple(v - w for v, w in zip(c, nearest(tuple(v - d for v, d in zip(c, o))))) for c in px]
+        o = tuple(median([d[i] for d in diffs]) for i in range(3))
+    err_add = median([dist(tuple(v - d for v, d in zip(c, o)), nearest(tuple(v - d for v, d in zip(c, o)))) for c in px])
+    # an offset only lights a frame up, blue included (his colors have none: an offset without it is a fade the
+    # factor describes, wrongly fitted)
+    lit = min(o) >= -6 and o[2] >= 6
+    mode = ("mul", k) if err_mul <= err_add or not lit else ("add", o)
+    if mode == ("add", (0, 0, 0)):
+        mode = ("mul", 1.0)
+
+    def undo(c):
+        if mode[0] == "mul":
+            return tuple(min(255, round(v / mode[1]))for v in c)
+        return tuple(max(0, min(255, v - d)) for v, d in zip(c, mode[1]))
+
+    out = im.copy()
+    for y in range(im.height):
+        for x in range(im.width):
+            p = im.getpixel((x, y))
+            if not p[3]:
+                continue
+            q = undo(p[:3])
+            n = nearest(q)
+            if dist(q, n) <= 30:
+                out.putpixel((x, y), n + (p[3],))
+    return out, mode
+
+
+def recolor_faded(im):
+    """A frame fading out unevenly (the doorway darkens it from one side): each pixel by its own hue - his color
+    with the closest RGB direction - keeping its own brightness."""
+    colored = [c for c in CONVICT if c not in (C_BLACK, C_SHINE, C_MARK)]
+    out = im.copy()
+    for y in range(im.height):
+        for x in range(im.width):
+            p = im.getpixel((x, y))
+            if not p[3] or p[:3] == C_BLACK:
+                continue
+            n = sum(v * v for v in p[:3]) ** 0.5
+            if n < 1:
+                continue
+            c = max(colored, key=lambda c: sum(a * b for a, b in zip(p[:3], c)) / (n * sum(v * v for v in c) ** 0.5))
+            k = n / sum(v * v for v in c) ** 0.5
+            her = RECOLOR[c]
+            out.putpixel((x, y), tuple(max(0, min(255, round(v * k))) for v in her) + (p[3],))
+    return out
+
+
+def shift(im, mode):
+    """Redoes normalize()'s shift on her frame."""
+    if mode == ("mul", 1.0):
+        return im
+    out = im.copy()
+    for y in range(im.height):
+        for x in range(im.width):
+            p = im.getpixel((x, y))
+            if p[3]:
+                if mode[0] == "mul":
+                    c = tuple(round(v * mode[1]) for v in p[:3])
+                else:
+                    c = tuple(max(0, min(255, v + d)) for v, d in zip(p[:3], mode[1]))
+                out.putpixel((x, y), c + (p[3],))
+    return out
+
+
+def eye_count(im):
+    """Separate clusters of his eye color."""
+    eyes = set(pixels_of(im, {C_EYE}))
+    n = 0
+    while eyes:
+        stack = [eyes.pop()]
+        n += 1
+        while stack:
+            x, y = stack.pop()
+            for q in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+                if q in eyes:
+                    eyes.discard(q)
+                    stack.append(q)
+    return n
+
+
+def upright(im):
+    """His full-size head above his body (not shrunk into a pit, not lying down)."""
+    box = head_box(im)
+    suit = pixels_of(im, SUIT_COLORS)
+    if box is None or not suit:
+        return False
+    x0, y0, x1, y1 = box
+    return x1 - x0 >= 9 and y1 <= min(y for _, y in suit) + 1
+
+
+def direction_for(im, facing):
+    strict = facing.endswith("!")
+    facing = facing.rstrip("!")
+    if not upright(im):
+        return None
+    eyes = eye_count(im)
+    if facing in FACING_FRONT:
+        if eyes == 2:
+            return facing
+        return BACK_OF[facing] if eyes == 0 and not strict else None
+    return facing if eyes == 0 else None
 
 
 def pixels_of(im, colors):
@@ -360,6 +532,13 @@ def main(argv):
         im = atlas.crop(d.rect(*atlas.size))
         return im.transpose(Image.Transpose.ROTATE_90) if d.flipped else im
 
+    def build(sprite_id, direction):
+        raw = frame(defs[sprite_id])
+        src, mode = normalize(raw)
+        if direction is None and mode[0] == "mul" and mode[1] < 1.0:
+            return recolor_faded(raw)
+        return shift(rebuild(src, direction, refs) if direction else recolor(src), mode)
+
     refs = {}
     for direction, (ref_name, art) in HEADS.items():
         rows = art.strip("\n").split("\n")
@@ -372,19 +551,26 @@ def main(argv):
         for clip in names:
             for sprite_id, _ in clips[clip]:
                 if sprite_id not in done:
-                    done[sprite_id] = rebuild(frame(defs[sprite_id]), direction, refs)
+                    done[sprite_id] = build(sprite_id, direction)
     for clip, direction in DODGE_ENDS.items():
         frames = clips[clip]
         for k, (sprite_id, _) in enumerate(frames):
-            src = frame(defs[sprite_id])
+            src, _ = normalize(frame(defs[sprite_id]))
             # the upright ends always; in between where he still faces us with both eyes (crouching into the roll)
             facing = direction in FACING_FRONT and len(pixels_of(src, {C_EYE})) >= 2
             if sprite_id not in done and (k in (0, len(frames) - 1) or facing):
-                done[sprite_id] = rebuild(src, direction, refs)
+                done[sprite_id] = build(sprite_id, direction)
+    for clip, facing in OTHER_CLIPS.items():
+        for sprite_id, _ in clips[clip]:
+            if sprite_id not in done:
+                src, _ = normalize(frame(defs[sprite_id]))
+                direction = direction_for(src, facing)
+                if direction:
+                    done[sprite_id] = build(sprite_id, direction)
     for d in defs:
         if not d.uvs:
             continue
-        im = done.get(d.index) or recolor(frame(d))
+        im = done.get(d.index) or build(d.index, None)
         if d.flipped:
             im = im.transpose(Image.Transpose.ROTATE_270)
         sheet.paste(im, d.rect(*atlas.size)[:2])
@@ -393,9 +579,10 @@ def main(argv):
 
     if preview:
         os.makedirs(preview, exist_ok=True)
-        rows = [c for names in DIRECTIONS.values() for c in names] + ["dodge", "dodge_bw", "dodge_left", "dodge_left_bw"]
-        sc, cw, ch = 4, 26 * 4, 30 * 4
-        img = Image.new("RGBA", (9 * cw, len(rows) * ch), (58, 52, 50, 255))
+        rows = [c for names in DIRECTIONS.values() for c in names] + list(DODGE_ENDS) + list(OTHER_CLIPS) + [
+            "select_light", "select_smoke_idle", "pitfall", "pitfall_down", "timefall", "ghost_idle_front", "slide_right"]
+        sc, cw, ch = 4, 26 * 4, 58 * 4
+        img = Image.new("RGBA", (25 * cw, len(rows) * ch), (58, 52, 50, 255))
         for r, clip in enumerate(rows):
             for k, (sprite_id, _) in enumerate(clips[clip]):
                 d = defs[sprite_id]

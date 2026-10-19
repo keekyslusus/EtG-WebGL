@@ -274,8 +274,12 @@ resources), on Convict's frames; the past and the unlock come later.
   `tools/build_sheet.py` makes it from the ripped collection: all frames recolored to her palette; idle and run in
   four directions (with the hand variants) and the dodges' upright / face-on frames get one of four drawn heads
   (dark bob, design v4) placed by his eyes or hair, a cropped sailor top with scarf, a belt raised three rows and a
-  long skirt over the legs, geta. The rolling dodge frames and the rest (Breach idles, death, pitfall...) are only
-  recolored so far. `tools/extract_frames.py` cuts a collection into PNGs for reference.
+  long skirt over the legs, geta. So do the upright frames of the other clips facing the way the clip says
+  (table kicks, item get, jetpack, doorway, chest, spin, the start of death, the Breach idles). Frames come with
+  slightly-off colors, darkened (doorway: per pixel by hue then) or lit (petting): they are snapped to his palette
+  first and the shift is redone on hers. Recolored only: the rolling dodge frames, lying / shrinking frames
+  (pitfall, spit_out), ghosts, and the Breach's smoking / lighter idles (his poses until hers are designed).
+  `tools/extract_frames.py` cuts a collection into PNGs for reference.
 
 - **Ninth Inning** (`skb:ninth_inning`): a copy of gun 616, the nailed Casey that the #NAILBAT synergy ("Careful
   Iteration": Casey + one of guns 26, 143 / items 457, 118) switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's

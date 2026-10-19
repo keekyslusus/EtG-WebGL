@@ -350,6 +350,8 @@ namespace EtgModSmoke
                 s.status = "failed";
                 yield break;
             }
+            ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(m_reportDir, "breach.png"));
+            s.notes.Add("screenshot: breach.png");
             Dictionary<string, FoyerCharacterSelectFlag> flags = new Dictionary<string, FoyerCharacterSelectFlag>();
             foreach (FoyerCharacterSelectFlag f in UnityEngine.Object.FindObjectsOfType<FoyerCharacterSelectFlag>())
             {
