@@ -21,6 +21,17 @@
 - `UnloadAsset can only be used on assets` (игровой `PostDungeonGenerationCleanup`) есть и в плеере → перенесено из
   `playmode` в известный шум (`SmokeLog.Noise`).
 
+## Release-сборка (2026-10-19)
+
+Release (9,5 мин, wasm 16 МБ / data 6 МБ в gzip), `?smoketest` все фазы: 19 мин, одна попытка, без падений; items
+52/52, shop 12/12, 0 failed / timeout / hang (`port/build/modsmoke/web-release-all.md`). Первая release-сборка с
+«explicitly thrown only» упала на `item:ex:sonic_box`: «memory access out of bounds» в
+`ExpandCompanionManager.LateUpdate` → `AIShooter.ToggleGunAndHandRenderers` у компаньона без `AIShooter` (Sonic); мод
+ловит этот NRE в try/catch, а без null-проверок вызов писал через null. Release теперь собирается с
+`FullWithoutStacktrace` (null и bounds checks есть, своего стека вызовов нет); стек падения назвали
+`Build/*.symbols.json` (`debugSymbolMode = External`). Страница при `?smoketest` считает «Halting program» падением
+(`console.txt`, `&resume`). В отчёте release нет стеков, поэтому все ошибки — категория `other`.
+
 ## Исправлено после прогона
 
 Баги мода, есть и в Steam; исправлены при запекании (`Patcher` → `WebShim.ModFixes`, `port/README.md`, Mods):

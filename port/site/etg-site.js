@@ -342,7 +342,13 @@
         var line = [].slice.call(arguments).map(String).join(" ");
         consoleRing.push(level + ": " + (line.length > 4000 ? line.slice(0, 4000) + " ..." : line));
         if (consoleRing.length > 400) consoleRing.shift();
-        return original.apply(console, arguments);
+        var result = original.apply(console, arguments);
+        // a wasm trap in the main loop (e.g. "memory access out of bounds" in a release build) halts the player
+        // without calling onAbort
+        if (level === "error" && /^Halting program/.test(line)) {
+          setTimeout(function () { Etg.onGameAbort("main loop exception (Halting program)"); }, 0);
+        }
+        return result;
       };
     });
   }

@@ -89,16 +89,20 @@ public static class EtgWebBuild
         // 2017.4 needed "--js-opts 0" here (fastcomp's JS optimizer); clear it, Emscripten 4 has no such flag.
         PlayerSettings.WebGL.emscriptenArgs = "";
         PlayerSettings.WebGL.dataCaching = true;
+        // Build/<name>.symbols.json next to the player (not downloaded by the page): maps a release build's
+        // "wasm-function[N]" stack frames to method names (?smoketest found a crash only the release build has).
+        PlayerSettings.WebGL.debugSymbolMode = WebGLDebugSymbolMode.External;
         PlayerSettings.WebGL.compressionFormat = WebGLCompressionFormat.Gzip;
-        // Full support makes il2cpp emit a null check before every member access, a bounds check on every
-        // array access and (WebGL can't walk the native stack) a push/pop of its own call stack in every
-        // managed method: measured in the browser, the game's code took 24-30 ms a frame in combat. EtG
-        // never catches NullReferenceException; its catch blocks (dfGUI bindings, FullInspector, iTween,
-        // reflection) wrap explicit throws, which "explicitly thrown only" still delivers. A null access
-        // then reads memory instead of throwing, so development builds keep full support to show bugs.
+        // Release: null and bounds checks stay, so a null access throws NullReferenceException as on Steam (Mono).
+        // The mods rely on that: Expand's ExpandCompanionManager.LateUpdate calls m_AIShooter.ToggleGunAndHandRenderers
+        // inside try/catch on companions without an AIShooter (Sonic). "Explicitly thrown only" (Unity 2017.4's
+        // choice: full support cost 24-30 ms a frame in asm.js) skipped the checks and that call wrote through null
+        // and halted the release build ("memory access out of bounds", ?smoketest 2026-10-19). Only the push/pop of
+        // il2cpp's own call stack in every method (WebGL can't walk the native stack) is left out of release builds;
+        // development builds keep it for managed stack traces.
         PlayerSettings.WebGL.exceptionSupport = fullExceptions
             ? WebGLExceptionSupport.FullWithStacktrace
-            : WebGLExceptionSupport.ExplicitlyThrownExceptionsOnly;
+            : WebGLExceptionSupport.FullWithoutStacktrace;
 
         AssetDatabase.SaveAssets();
         Debug.Log("[EtG Web] Player settings applied: graphics=" +

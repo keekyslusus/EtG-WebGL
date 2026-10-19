@@ -31,8 +31,9 @@ CGIncludes 6.6 — 3068/3068), бандлы (EtG Web → 3, данные FullIns
   undefined behaviour» в редакторе (свет при этом верный); плеер (`?smoketest`) этого не пишет — остаётся глянуть
   консоль браузера на предупреждения WebGL. Редактор GLES работает на shader level 46 (эмуляции WebGL
   в 6.6 нет), WebGL 2 — 35: SubShader / `#pragma target` выше 3.5 abtest не поймает.
-- Производительность: несмотря на отсутствие динамического батчинга в 6.6, dev-сборка держит 60 FPS против ~35 у
-  2017.4 — замерить F3/F4 в release-сборке для README.
+- Release собран и прогнан `?smoketest` (все фазы, без падений; release теперь с `FullWithoutStacktrace` — моды ловят
+  NullReferenceException, см. `port/tasks/webgl-smoketest.md`). Осталось руками на release: звук, геймпад, сохранения
+  (пройти этаж, перезагрузить, продолжить), полноэкранный режим, F3/F4 — FPS для README.
 
 ## 2. Завершение
 
