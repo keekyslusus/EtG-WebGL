@@ -148,6 +148,17 @@ internal static partial class Program
             "ExpandTheGungeon.ExpandPrefab.ExpandPrefabs", "basic_special_rooms_noBlackMarket", "priority", 1), // NodePriority.OPTIONAL
     };
 
+    // Mod bug fixes (also in the Steam game): calls in <Type>::<Method> to <CalledType>::<CalledMethod> on a receiver
+    // that can be null become a static WebShim call that skips null (same stack effect: the receiver is its argument).
+    // Exactly <Count> such calls are expected.
+    // - Expand's PortableShip.ResetConfig (OnPreDrop, OnDestroy) clears LaserShootPoints, which only DoEffect fills: a
+    //   Portable Ship that was never used threw NullReferenceException when dropped or destroyed (?smoketest).
+    private static readonly (string Type, string Method, string CalledType, string CalledMethod, int Count, string ShimType, string ShimMethod, string ShimParameter)[] NullSafeCalls =
+    {
+        ("ExpandTheGungeon.ItemAPI.PortableShip", "ResetConfig", "System.Collections.Generic.List`1", "Clear", 1,
+            "WebShim.ModFixes", "ClearIfNotNull", "System.Collections.IList"),
+    };
+
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
     // errors where something IL2CPP-specific may go wrong. Logging only, behaviour unchanged.
     private static readonly (string Type, string Method)[] LogSwallowedExceptions =
@@ -387,6 +398,27 @@ internal static partial class Program
                 il.InsertAfter(ldValue, il.Create(OpCodes.Stfld, field));
                 method.Body.OptimizeMacros();
                 report.Count($"flow node with {tableField}: {nodeField} = {value}: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName, calledType, calledMethod, expected, shimType, shimMethod, shimParameter) in NullSafeCalls)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            {
+                var target = module.ImportReference(shim.Find(shimType, shimMethod, [shimParameter]));
+                int count = 0;
+                foreach (var ins in method.Body.Instructions.Where(i => i.OpCode.Code is Code.Call or Code.Callvirt
+                    && i.Operand is MethodReference m && m.Name == calledMethod && m.Parameters.Count == 0
+                    && m.DeclaringType.GetElementType().FullName == calledType))
+                {
+                    ins.OpCode = OpCodes.Call;
+                    ins.Operand = target;
+                    count++;
+                }
+                if (count != expected)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected {expected} calls to {calledType}::{calledMethod}, found {count}");
+                }
+                report.Count($"null-safe {calledMethod} -> {shimType}.{shimMethod}: {typeName}.{methodName}");
             }
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)

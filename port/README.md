@@ -296,6 +296,9 @@ ApacheThunder's Expand the Gungeon 3.0.8 brings three Windows AssetBundles (`exp
 - **Glitch chest floor** (mod bug, also on Steam; `FlowNodeFixes`): `Custom_GlitchChest_Flow`'s boss node is a CONNECTOR
   with a boss room table, so the generator backtracked forever (~1 in 6 glitch floors). The node is BOSS now, like in
   `Custom_Glitch_Flow`.
+- **Portable Ship** (mod bug, also on Steam; `Patcher` `NullSafeCalls` -> `WebShim.ModFixes`): `ResetConfig` (drop,
+  destroy) clears `LaserShootPoints`, which only exists once the ship was used, so an unused Portable Ship threw
+  NullReferenceException. In a release WebGL build (no null checks) such a call can take the runtime down.
 - `Patcher verify` also fails on a branch whose target isn't an instruction (a short branch overflowed by inserted code
   crashes il2cpp after 20 minutes) and on a parameter with HasDefault but no Constant (the editor's Mono aborts in
   `GetParameters()` on any stack trace through it; seen with 2017.4's Mono 2.x). `bash port/monosigcheck.sh` checks the
