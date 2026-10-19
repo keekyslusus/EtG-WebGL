@@ -304,6 +304,10 @@ resources), on Convict's frames; the past and the unlock come later.
   uses it in five rooms and saves screenshots (`port/build/modsmoke/sukeban-room*.png`).
 - **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup; a Harmony postfix on
   `PassiveReflectItem.ReflectBulletsInRange` (all reflections, the bat's included) gives +1.5 speed for 3 s.
+- **Portrait** (`Character/facecard.png`, 34 x 34 like the game's dialogue portraits): drawn by
+  `tools/facecards.py` (variants; `CHOSEN` = the glare with the kugibatto behind her head). Alexandria adds it to the
+  conversation bar's atlas as `PlayerSukeban_facecard`; the smoke test's character step checks it is there and cuts it
+  out to `<character>-portrait.png`.
 - Names and descriptions in English and Russian. Placeholder icons: `tools/placeholder_sprites.py`.
 
 ### Expand the Gungeon (mods with their own AssetBundles, sound banks and shaders)

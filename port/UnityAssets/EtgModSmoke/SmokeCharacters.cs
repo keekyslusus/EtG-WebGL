@@ -133,6 +133,7 @@ namespace EtgModSmoke
                 passives.Add(i.EncounterNameOrDisplayName + " #" + i.PickupObjectId);
             }
             s.notes.Add("guns: " + Join(guns) + "; actives: " + Join(actives) + "; passives: " + Join(passives));
+            Portrait(s, p);
             if (guns.Count == 0)
             {
                 s.notes.Add("starts without a gun");
@@ -277,6 +278,38 @@ namespace EtgModSmoke
                 yield return Wait(0.4f);
             }
             s.notes.Add("actives used in " + visited + " rooms, screenshots: " + Join(shots));
+        }
+
+        // The dialogue portrait: uiPortraitName must be in the conversation bar's atlas; cut out to
+        // <report dir>/<character>-portrait.png when the atlas texture is readable.
+        private void Portrait(StepResult s, PlayerController p)
+        {
+            dfAtlas atlas = GameUIRoot.Instance != null && GameUIRoot.Instance.ConversationBar != null
+                ? GameUIRoot.Instance.ConversationBar.portraitSprite.Atlas : null;
+            dfAtlas.ItemInfo item = atlas == null ? null : atlas[p.uiPortraitName];
+            if (item == null)
+            {
+                s.notes.Add("portrait " + p.uiPortraitName + ": not in the atlas");
+                return;
+            }
+            Texture2D tex = atlas.Texture;
+            int x = Mathf.RoundToInt(item.region.x * tex.width), y = Mathf.RoundToInt(item.region.y * tex.height);
+            int w = Mathf.RoundToInt(item.region.width * tex.width), h = Mathf.RoundToInt(item.region.height * tex.height);
+            string note = "portrait " + p.uiPortraitName + " (" + w + "x" + h + ")";
+            try
+            {
+                Texture2D cut = new Texture2D(w, h, TextureFormat.RGBA32, false);
+                cut.SetPixels(tex.GetPixels(x, y, w, h));
+                cut.Apply();
+                string file = s.id + "-portrait.png";
+                System.IO.File.WriteAllBytes(System.IO.Path.Combine(m_reportDir, file), cut.EncodeToPNG());
+                note += ", " + file;
+            }
+            catch (Exception e)
+            {
+                note += ", not readable (" + e.GetType().Name + ")";
+            }
+            s.notes.Add(note);
         }
 
         // A plain bullet (38 Special's) aimed at the player, just past the gun's barrel: what a charged bat reflects.
