@@ -3,7 +3,7 @@
 # Usage: powershell -ExecutionPolicy Bypass -File serve-webbuild.ps1 [-Dir webbuild6] [-Port 8080] [-NoBrowser]
 #   -Dir: webbuild (default; the Unity 2017.4 build until the migration ends) or webbuild6 (Unity 6.6)
 param(
-    [string]$Dir = 'webbuild',
+    [string]$Dir = 'webbuild6',
     [int]$Port = 8080,
     [switch]$NoBrowser
 )
