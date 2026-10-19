@@ -114,6 +114,9 @@ namespace EtgModSmoke
             "No mid game save found",
             "Unable to find clip 'select_idle'",
             "Material doesn't have a float or range property '_StencilVal'",
+            // Dungeon.PostDungeonGenerationCleanup unloads runtime objects the mods' floors made; the WebGL player
+            // logs it as well (?smoketest, 2026-10-19), so not a Play Mode limitation
+            "UnloadAsset can only be used on assets",
         };
 
         // The editor protects assets and constructors; a player build (WebGL included) doesn't.
@@ -124,8 +127,6 @@ namespace EtgModSmoke
             "on prefab object",
             "resides in a prefab",
             "Destroying assets is not permitted",
-            // BundleShim hands out runtime copies of mod-bundle prefabs in Play Mode; in the player they are assets
-            "UnloadAsset can only be used on assets",
         };
 
         // Exceptions the port causes (Mono's access checks against baked code, missing members after rewriting).

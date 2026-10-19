@@ -308,17 +308,81 @@
   Etg.exportSaves = function () {
     return Etg.listSaves().then(function (saves) {
       if (!saves.files.length) throw new Error("No save files yet");
-      var blob = zipStore(saves.files);
-      var a = document.createElement("a");
       var d = new Date();
-      a.download = "gungeon-save-" + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + ".zip";
-      a.href = URL.createObjectURL(blob);
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+      download(zipStore(saves.files),
+        "gungeon-save-" + d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + ".zip");
       return saves.files.length;
     });
+  };
+
+  function download(blob, name) {
+    var a = document.createElement("a");
+    a.download = name;
+    a.href = URL.createObjectURL(blob);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
+  }
+
+  // ------------------------------------------------------------------ mod smoke test (?smoketest)
+
+  /** Whether the page was opened to run the mod smoke test (?smoketest[=phases][&only=..][&resume]). */
+  Etg.smokeTest = /[?&]smoketest\b/.test(location.search);
+
+  // During ?smoketest the page keeps the last console lines: the browser's console buffer drops old messages, and
+  // when the runtime aborts the reason is the first thing lost under a flood of "user callback triggered after
+  // runtime exited". On abort they go to serve.py --reports (console.txt) and the page resumes the test, like
+  // port/modsmoke.sh restarts a crashed editor; the step that was running is reported as "hang".
+  var consoleRing = [];
+  if (Etg.smokeTest) {
+    ["log", "warn", "error"].forEach(function (level) {
+      var original = console[level];
+      console[level] = function () {
+        var line = [].slice.call(arguments).map(String).join(" ");
+        consoleRing.push(level + ": " + (line.length > 4000 ? line.slice(0, 4000) + " ..." : line));
+        if (consoleRing.length > 400) consoleRing.shift();
+        return original.apply(console, arguments);
+      };
+    });
+  }
+
+  Etg.onGameAbort = function (what) {
+    if (!Etg.smokeTest || Etg.gameAborted) return;
+    Etg.gameAborted = true;
+    var text = "abort: " + what + "\n\n" + consoleRing.join("\n");
+    fetch("__smoke/console.txt", { method: "POST", body: text }).catch(function () {}).then(function () {
+      var url = location.href.split("#")[0];
+      if (!/[?&]resume\b/.test(url)) url += "&resume";
+      Etg.guardUnload(false);
+      setTimeout(function () { location.href = url; }, 2000);
+    });
+  };
+
+  /**
+   * Called by the game (EtgModSmoke.jslib) after every report write; window.EtgSmoke holds the latest report.
+   * "restart before X": the attempt ended after a broken level load, so reload with &resume (the test carries the
+   * finished steps over from IndexedDB); otherwise, at the end, save report.md and report.json.
+   */
+  Etg.onSmokeReport = function (report) {
+    // a local serve.py --reports keeps the latest report on disk (also after a hang); elsewhere the POST just fails
+    ["report.md", "report.json"].forEach(function (name) {
+      fetch("__smoke/" + name, { method: "POST", body: name === "report.md" ? report.markdown : report.json })
+        .catch(function () {});
+    });
+    if (!report.finished) return;
+    if (/^restart before /.test(report.state)) {
+      var url = location.href.split("#")[0];
+      if (!/[?&]resume\b/.test(url)) url += "&resume";
+      console.log("[ModSmoke] " + report.state + ": reloading with &resume");
+      Etg.guardUnload(false);
+      setTimeout(function () { location.href = url; }, 500);
+      return;
+    }
+    console.log("[ModSmoke] finished: " + report.state);
+    download(new Blob([report.markdown], { type: "text/markdown" }), "modsmoke-report.md");
+    download(new Blob([report.json], { type: "application/json" }), "modsmoke-report.json");
+    Etg.toast("Smoke test " + report.state + ": report saved");
   };
 
   function pad(n) {
@@ -536,6 +600,10 @@
         showBanner: function (msg, type) {
           if (type === "error") fail(msg);
           else console.warn(msg);
+        },
+        // the wasm runtime died (abort: out of memory, unreachable, ...); the page stays up but the game is gone
+        onAbort: function (what) {
+          if (Etg.onGameAbort) Etg.onGameAbort(String(what));
         },
       }, progress).then(function (instance) {
         Etg.game = instance;

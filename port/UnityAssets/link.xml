@@ -12,5 +12,7 @@
   <assembly fullname="dfScriptLite" preserve="all" />
   <assembly fullname="ConditionalExpression" preserve="all" />
   <assembly fullname="WebShim" preserve="all" />
+  <!-- the mod smoke test (?smoketest): JsonUtility report types, RuntimeInitializeOnLoadMethod start -->
+  <assembly fullname="EtgModSmoke" preserve="all" />
   <assembly fullname="UnityEngine.CoreModule" preserve="all" />
 </linker>

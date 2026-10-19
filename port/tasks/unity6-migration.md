@@ -11,23 +11,27 @@ CGIncludes 6.6 — 3068/3068), бандлы (EtG Web → 3, данные FullIns
 
 ## 1. Первая dev-сборка и проверка в браузере
 
-- `bash port/webbuild.sh --mods` → `webbuild6/` (куча 512 → 4096 МБ, wasm32).
+- `bash port/webbuild.sh --mods` → `webbuild6/` (куча 512 → 4096 МБ, wasm32). Первая сборка 2026-10-19: **7,5 мин**
+  (2017.4 — 1 ч 48 мин), wasm 158 МБ, data 19 МБ; dev-сборку 6.6 не сжимает (`.gz` нет, `etg-build.js` это учитывает).
+  В браузере грузится за ~10 с, заставки и титульный экран Expand the Gungeon, клавиатура работает; по словам
+  пользователя, несколько этажей — стабильные 60 FPS даже в dev-сборке (2017.4 — ~35).
 - jslib под Emscripten 4 (`UTF8ToString`, `__sig`, `ptrToIdx`) в браузере ещё не проверен: звук, геймпад,
   `FS.syncfs`.
-- `?smoketest` (`port/tasks/webgl-smoketest.md`): ошибки только IL2CPP (новее на 8 лет: shared generics, stripping —
-  `stripEngineCode = false` и `link.xml`, исключения).
+- `?smoketest` сделан и прогнан (`port/tasks/webgl-smoketest.md`): все фазы проходят, ошибок порта / IL2CPP нет;
+  открыто там же — `GetUntrimmedBounds` на glitch-этажах и одно неповторившееся падение рантайма.
 - Память с модами в пределах 4 ГБ; wasm64 включать, только если не хватит (Chrome/Edge 128+, Firefox 129+, Safari нет).
 - Страница на настоящей игре: полноэкранный режим игры (переопределённый `canvas.requestFullscreen` — зовёт ли его
-  6.6), ввод (Esc, keyboard lock), F3/F4-монитор (`Etg.gl()`), `?smoketest`. `serve-webbuild.ps1 -Dir webbuild6`.
+  6.6), ввод (Esc, keyboard lock), F3/F4-монитор (`Etg.gl()`). `serve-webbuild.ps1 -Dir webbuild6`.
 - 6.6 предупреждает: ручной `JS_FileSystem_Sync` (`PlayerPrefs.Save`, `FS.syncfs` в jslib) устарел — решить про
   `autoSyncPersistentDataPath: true` в конфиге `createUnityInstance` (`etg-site.js`).
 - Шейдеры: *Always Included* компилируются только при сборке плеера — ошибки компиляции в логе сборки. В браузере —
   консоль на `Feedback loop` / `GL_INVALID_OPERATION`: `Pixelator.RenderGBuffer*` делает `Blit(temporary, temporary,
   m_pointLightMaterial)`, и 6.6 пишет «A call to Blit with source and dest set to the same RenderTexture may result in
-  undefined behaviour» (в редакторе свет при этом верный). Редактор GLES работает на shader level 46 (эмуляции WebGL
+  undefined behaviour» в редакторе (свет при этом верный); плеер (`?smoketest`) этого не пишет — остаётся глянуть
+  консоль браузера на предупреждения WebGL. Редактор GLES работает на shader level 46 (эмуляции WebGL
   в 6.6 нет), WebGL 2 — 35: SubShader / `#pragma target` выше 3.5 abtest не поймает.
-- Производительность против 2017.4: в 6.6 нет динамического батчинга (по замеру на 2017.4 он экономил 12–16 % draw
-  calls, оценка +0,4–0,8 мс на кадр).
+- Производительность: несмотря на отсутствие динамического батчинга в 6.6, dev-сборка держит 60 FPS против ~35 у
+  2017.4 — замерить F3/F4 в release-сборке для README.
 
 ## 2. Завершение
 

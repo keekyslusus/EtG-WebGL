@@ -345,4 +345,13 @@ in Editor.log says what was running.
 Code: `UnityAssets/EtgModSmoke/` (mods only through reflection, so it compiles without them) and
 `Editor/EtgWebBuild/EtgModSmokeMenu.cs` (phases go through `Temp/modsmoke.pending`, since Play Mode reloads the domain).
 Not covered: whether things look or sound right, mod NPCs / shrines outside the visited rooms, synergies, real boss
-fights, co-op, and IL2CPP-only failures (running it in the player: `port/tasks/webgl-smoketest.md`).
+fights, co-op.
+
+**In the browser** (WebGL development build, IL2CPP: what Play Mode can't show): open the page with
+`?smoketest[=phases][&only=a,b][&resume]` (`SmokeWeb.cs` reads `Application.absoluteURL`; without the parameter no test
+exists). The page presses Play by itself; the report is written to `persistentDataPath/modsmoke` (IndexedDB) after every
+step and handed to the page (`EtgModSmoke.jslib` -> `window.EtgSmoke`), which downloads it at the end. Served by
+`port/site/serve.py --reports port/build/modsmoke/web` (launch.json `webbuild6`), the page also posts `report.md` /
+`report.json` there after every step. "restart before X" reloads the page with `&resume`, and so does a runtime abort
+(`Module.onAbort`; the last 400 console lines go to `console.txt` first, the running step becomes **hang**). A frozen
+page needs a manual reload with `&resume`. Keep the browser pane visible: a hidden one barely gets frames.

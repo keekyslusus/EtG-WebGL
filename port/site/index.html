@@ -234,6 +234,7 @@
         ready: function () {
           playBtn.disabled = false;
           playBtn.focus();
+          if (Etg.smokeTest) playBtn.onclick(); // the mod smoke test runs by itself; show the game
         },
         error: function (msg) {
           document.getElementById("phase").textContent = msg;

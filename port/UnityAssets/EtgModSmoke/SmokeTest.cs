@@ -51,9 +51,15 @@ namespace EtgModSmoke
         // ---- start ---------------------------------------------------------------------------------
 
         // Editor: EtgModSmokeMenu writes Temp/modsmoke.pending (phases;filter) and enters Play Mode.
+        // WebGL player: the page's URL, ?smoketest[=phases][&only=a,b][&resume] (port/README.md, Smoke test).
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         private static void AutoStart()
         {
+            if (Application.platform == RuntimePlatform.WebGLPlayer)
+            {
+                WebAutoStart();
+                return;
+            }
             if (!Application.isEditor)
             {
                 return;
@@ -124,11 +130,14 @@ namespace EtgModSmoke
         {
             string resume = Path.Combine(m_reportDir, "resume");
             string json = Path.Combine(m_reportDir, "report.json");
-            if (!File.Exists(resume) || !File.Exists(json))
+            if ((!File.Exists(resume) && !s_webResume) || !File.Exists(json))
             {
                 return;
             }
-            File.Delete(resume);
+            if (File.Exists(resume))
+            {
+                File.Delete(resume);
+            }
             try
             {
                 Report prev = JsonUtility.FromJson<Report>(File.ReadAllText(json));
@@ -1511,6 +1520,10 @@ namespace EtgModSmoke
                     string md = Path.Combine(m_reportDir, "report.md");
                     File.WriteAllText(md, ReportWriter.Markdown(r));
                     return md;
+                }
+                if (Application.platform == RuntimePlatform.WebGLPlayer && m_reportDir != null)
+                {
+                    return WebWriteReport(r);
                 }
                 if (m_finished)
                 {
