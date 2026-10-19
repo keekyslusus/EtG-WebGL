@@ -1,0 +1,15 @@
+base: Convict
+name: The Sukeban
+name short: Sukeban
+nickname: Batter
+
+<loadout>
+	skb:ninth_inning infinite
+	skb:koshien_dirt
+	skb:armored_elbow_guard
+</loadout>
+
+# Alexandria's HandleLoadout throws without this list, alternate costume or not.
+<altGuns>
+	skb:ninth_inning infinite
+</altGuns>

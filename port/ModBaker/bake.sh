@@ -9,6 +9,13 @@ dotnet build "$PORT/ModBaker" -c Release -o "$PORT/build/ModBaker" -nologo -v q
 for p in BepInEx Harmony MonoMod.RuntimeDetour; do
     dotnet build "$PORT/ModFacades/$p" -c Release -o "$PORT/build/ModFacades" -nologo -v q
 done
+# Our own mods (version "local" in modpack.txt) are built from port/mods/<pkg> into the same layout.
+while read -r pkg ver; do
+    if [ "$ver" = local ]; then
+        rm -rf "$MODS/$pkg/plugins"
+        dotnet build "$PORT/mods/$pkg" -c Release -o "$MODS/$pkg/plugins" -nologo -v q
+    fi
+done < <(grep -vE '^\s*(#|$)' "$PORT/mods/modpack.txt")
 dirs=()
 while read -r pkg ver; do
     if [ "$pkg" = "BepInEx-BepInExPack_EtG" ]; then

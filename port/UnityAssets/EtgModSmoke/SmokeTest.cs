@@ -23,7 +23,7 @@ namespace EtgModSmoke
         public const string PhaseEnemies = "enemies";
         public const string PhaseFloors = "floors";
         public const string PhaseFlows = "flows";
-        public static readonly string[] AllPhases = { PhaseItems, PhaseShop, PhaseEnemies, PhaseFloors, PhaseFlows };
+        public static readonly string[] AllPhases = { PhaseItems, PhaseShop, PhaseEnemies, PhaseFloors, PhaseFlows, PhaseCharacters };
 
         // Set by the editor (exits Play Mode when the run is over). Argument: report path.
         public static Action<string> Finished;
@@ -236,6 +236,7 @@ namespace EtgModSmoke
             List<StepResult> enemies = new List<StepResult>();
             List<StepResult> floors = new List<StepResult>();
             List<StepResult> flows = new List<StepResult>();
+            List<StepResult> characters = new List<StepResult>();
             Dictionary<string, PickupObject> itemObjects = new Dictionary<string, PickupObject>();
             Dictionary<string, AIActor> enemyObjects = new Dictionary<string, AIActor>();
             Dictionary<string, string[]> loads = new Dictionary<string, string[]>();
@@ -244,13 +245,14 @@ namespace EtgModSmoke
                 CollectItems(items, shop, itemObjects);
                 CollectEnemies(enemies, enemyObjects);
                 CollectFloors(floors, flows, loads);
+                CollectCharacters(characters);
             }
             catch (Exception e)
             {
                 SmokeLog.RecordException(e, "collecting mod content");
             }
             Log("mods: " + string.Join(", ", new List<string>(SmokeLog.ModAssemblies).ToArray()) + "; items " + items.Count + ", shop " + shop.Count +
-                ", enemies " + enemies.Count + ", floors " + floors.Count + ", flows " + flows.Count);
+                ", enemies " + enemies.Count + ", floors " + floors.Count + ", flows " + flows.Count + ", characters " + characters.Count);
             WriteReport();
 
             StepResult run = AddStep("run", "start", "Quick start (Pilot) -> first floor", null, null);
@@ -294,6 +296,20 @@ namespace EtgModSmoke
             foreach (StepResult s in flows)
             {
                 yield return StartCoroutine(RunStep(s, FloorTest(s, loads[s.Key]), 180f));
+            }
+            foreach (StepResult s in characters)
+            {
+                yield return StartCoroutine(RunStep(s, CharacterTest(s), 60f));
+            }
+            if (characters.Count > 0)
+            {
+                // leaves the run: last
+                StepResult breach = AddStep("breach", "character-select", "Mod characters in the Breach", null, null);
+                if (!breach.carried)
+                {
+                    m_state = "running " + breach.Key;
+                    yield return StartCoroutine(Drive(breach, BreachTest(breach, characters), 180f));
+                }
             }
             Finish("done");
         }

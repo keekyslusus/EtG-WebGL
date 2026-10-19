@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    The Sukeban character mod: a BepInEx plugin built on Alexandria's CharacterAPI, like the Thunderstore mods of
+    port/mods/modpack.txt ("Sukeban local" there). Built against the game's own assemblies and the packages
+    mods/fetch_mods.sh put into etg/mods; ModBaker/bake.sh builds it into etg/mods/Sukeban/plugins before baking.
+    The same DLL runs on Steam with r2modman (BepInEx/plugins/Sukeban/Sukeban.dll).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net35</TargetFramework>
+    <AssemblyName>Sukeban</AssemblyName>
+    <RootNamespace>Sukeban</RootNamespace>
+    <LangVersion>9.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <EtgRoot>$(MSBuildThisFileDirectory)..\..\..\</EtgRoot>
+    <Managed>$(EtgRoot)Enter the Gungeon\EtG_Data\Managed\</Managed>
+    <Mods>$(EtgRoot)mods\</Mods>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net35" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="$(Managed)Assembly-CSharp.dll" Private="false" />
+    <Reference Include="$(Managed)Assembly-CSharp-firstpass.dll" Private="false" />
+    <Reference Include="$(Managed)UnityEngine*.dll" Private="false" />
+    <Reference Include="$(Mods)BepInEx-BepInExPack_EtG\BepInExPack_EtG\BepInEx\core\BepInEx.dll" Private="false" />
+    <Reference Include="$(Mods)BepInEx-BepInExPack_EtG\BepInExPack_EtG\BepInEx\core\0Harmony.dll" Private="false" />
+    <Reference Include="$(Mods)MtG_API-Mod_the_Gungeon_API\plugins\MtGAPI\ModTheGungeonAPI.dll" Private="false" />
+    <Reference Include="$(Mods)Alexandria-Alexandria\plugins\Alexandria.dll" Private="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Alexandria finds them by manifest name: Sukeban.Resources.koshien_dirt.png, Sukeban.Character.characterdata.txt -->
+    <EmbeddedResource Include="Resources\*.png" />
+    <EmbeddedResource Include="Character\**\*" />
+    <None Remove="tools\**" />
+  </ItemGroup>
+</Project>

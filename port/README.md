@@ -225,7 +225,10 @@ the packages of `port/mods/modpack.txt` (plain `./apply.sh` takes them out again
   `HarmonyManipulator.Manipulate` build each patched body and copies it into the game DLL with Cecil.
   - Patches on methods that can't be rewritten (UnityEngine, mscorlib: `Object.Instantiate`, `Enum.GetValues`) become
     wrappers in the mod (`ModBaker.Redirects`) and every call is redirected to them. Engine generic overloads that call
-    a patched method (`Instantiate<T>`) get copies there too (`Type_Method_GN`).
+    a patched method (`Instantiate<T>`) get copies there too (`Type_Method_GN`), and so do plain overloads of the same
+    name that forward to it using only public members: MtG API's finalizer on `Enum.Parse(Type, string, bool)` reads
+    a mod character's `PlayableCharacters` name back from the save, and FullSerializer calls `Enum.Parse(Type,
+    string)` - without the copy, returning to the Breach after a run as a mod character threw ArgumentException.
   - `[HarmonyReversePatch]` stand-ins get a copy of the original body.
   - MonoMod `new Hook(from, to[, target])`: from/to are recovered by evaluating the reflection code before the
     constructor; the original body moves to `Name_orig_bakedN`. Mods switch hooks on and off at runtime, so each pair
@@ -255,6 +258,25 @@ the packages of `port/mods/modpack.txt` (plain `./apply.sh` takes them out again
   `dfControl` by its first OnGUI). `Paths.GameRootPath` is `<persistentDataPath>/modded` in IndexedDB; the Chainloader
   facade creates `SilverJacketData/` there (Silver Jacket writes to it on every pickup but never creates it).
 - Play Mode (`EtG Web/Play From Boot`) runs the mods from `etg/mods-runtime/` without a WebGL build.
+- **Our own mods**: a `modpack.txt` line with version `local` is a mod whose source lives in `port/mods/<name>`;
+  `fetch_mods.sh` skips it and `ModBaker/bake.sh` builds it (`dotnet build`, net35 against the game's assemblies and
+  the fetched packages) into `etg/mods/<name>/plugins`, the layout of a Thunderstore package. The DLL also runs on
+  Steam (copy it into r2modman's `BepInEx/plugins`).
+
+### Sukeban (our character mod, `port/mods/Sukeban`)
+
+A playable character built on Alexandria's CharacterAPI (`Loader.BuildCharacter`, data and sprites as embedded
+resources). Convict's body for now (no sprites of her own yet: Alexandria then keeps the base character's); the past
+and the unlock come later.
+
+- **Ninth Inning** (`skb:ninth_inning`): a copy of gun 616, the nailed Casey that the #NAILBAT synergy ("Careful
+  Iteration": Casey + one of guns 26, 143 / items 457, 118) switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's
+  `MegaReflection`). 616's sprites; the Ammonomicon icon falls back to Casey's.
+- **Koshien Dirt** (`skb:koshien_dirt`, active, 450 damage cooldown): pours a home base (flat floor sprite, 15 s);
+  standing on it multiplies `ChargeAmountMultiplier` by 2 (what `Gun` uses for charge time).
+- **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup; a Harmony postfix on
+  `PassiveReflectItem.ReflectBulletsInRange` (all reflections, the bat's included) gives +1.5 speed for 3 s.
+- Names and descriptions in English and Russian. Placeholder icons: `tools/placeholder_sprites.py`.
 
 ### Expand the Gungeon (mods with their own AssetBundles, sound banks and shaders)
 
@@ -343,6 +365,10 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    game / mod does: boss rush flows in `GameMode.BOSSRUSH`, glitch chest flows with `isGlitchFlow` on Phobos and Space,
    the rest with their tileset); the player then warps into up to 12 non-boss rooms. A `diag` step lists Expand's room
    tables with entries the generator can't use.
+5. every mod character (MtG API's `ETGModConsole.Characters` beyond the game's twelve, where Alexandria's CharacterAPI
+   registers them) is switched to like the `character` command; its starting guns / items, health and armor are
+   noted, its actives used and its gun swung charged at an enemy bullet put in front of it, with the player stats each
+   changed. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`).
 
 Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting
 enemies, dynamic batching is switched on and off through the player settings (restored after) and `UnityStats` draw

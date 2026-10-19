@@ -7,6 +7,7 @@ CACHE="${R2MODMAN_CACHE:-$APPDATA/r2modmanPlus-local/ETG/cache}"
 OUT="$ROOT/mods"
 mkdir -p "$OUT"
 grep -vE '^\s*(#|$)' "$HERE/modpack.txt" | while read -r pkg ver; do
+    [ "$ver" = local ] && continue   # built from port/mods/<pkg> by ModBaker/bake.sh
     src="$CACHE/$pkg/$ver"
     [ -d "$src" ] || { echo "missing $src (install it with r2modman first)" >&2; exit 1; }
     rm -rf "$OUT/$pkg"

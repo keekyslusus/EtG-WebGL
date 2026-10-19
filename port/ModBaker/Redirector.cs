@@ -26,6 +26,11 @@ namespace EtgModBaker;
 /// (`Type_Method_GN`, body from the engine, inner calls redirected) and its callers go to the copy.
 /// Instantiate&lt;T&gt;(T) uses engine internals instead; MtG API's MonoMod patch routes it through
 /// Instantiate(Object), reproduced here by a hand-written generic wrapper.
+///
+/// The same goes for non-generic overloads of a patched method that forward to it: MtG API's finalizer on
+/// Enum.Parse(Type, string, bool) resolves extended enum names (a mod character's PlayableCharacters value in the
+/// save), and FullSerializer calls Enum.Parse(Type, string), which mscorlib forwards to the patched one. Such an
+/// overload (same type and name, public, its body calling only public members) is copied like the generic ones.
 /// </summary>
 internal sealed class Redirector
 {
@@ -154,7 +159,9 @@ internal sealed class Redirector
         return g;
     }
 
-    /// <summary>Copies the generic engine methods that call patched ones (see the class comment).</summary>
+    /// <summary>
+    /// Copies the generic engine methods and the forwarding overloads that call patched ones (see the class comment).
+    /// </summary>
     public static void AddGenericForwarders(CecilWorld world, Transplanter transplant)
     {
         bool added = true;
@@ -165,9 +172,11 @@ internal sealed class Redirector
             {
                 var engineType = pair.Key;
                 var holder = pair.Value;
-                foreach (var m in engineType.Methods.Where(m => m.HasGenericParameters && m.IsStatic && m.IsPublic && m.HasBody).ToList())
+                var patchedNames = new HashSet<string>(engineType.Methods.Where(m => Wrappers.ContainsKey(Key(m))).Select(m => m.Name));
+                foreach (var m in engineType.Methods.Where(m => m.IsStatic && m.IsPublic && m.HasBody
+                             && (m.HasGenericParameters || (patchedNames.Contains(m.Name) && CallsOnlyPublic(m)))).ToList())
                 {
-                    if (GenericForwarders.ContainsKey(Key(m)) || !m.Body.Instructions.Any(i => i.Operand is MethodReference r && Target(r) != null))
+                    if (GenericForwarders.ContainsKey(Key(m)) || Wrappers.ContainsKey(Key(m)) || !m.Body.Instructions.Any(i => i.Operand is MethodReference r && Target(r) != null))
                     {
                         continue;
                     }
@@ -189,12 +198,38 @@ internal sealed class Redirector
                     }
                     transplant.ReplaceBody(m, copy);
                     RedirectCalls(copy, imp);
-                    GenericForwarders[Key(m)] = copy;
-                    Console.WriteLine($"   generic forwarder: {m.FullName} -> {holder.Module.Assembly.Name.Name} {copy.Name}");
+                    if (m.HasGenericParameters)
+                    {
+                        GenericForwarders[Key(m)] = copy;
+                    }
+                    else
+                    {
+                        Wrappers[Key(m)] = copy; // Target() looks non-generic calls up there
+                    }
+                    Console.WriteLine($"   {(m.HasGenericParameters ? "generic" : "overload")} forwarder: {m.FullName} -> {holder.Module.Assembly.Name.Name} {copy.Name}");
                     added = true;
                 }
             }
         }
+    }
+
+    // A copy of the body must not reach the engine's / mscorlib's internals from the mod.
+    private static bool CallsOnlyPublic(MethodDefinition m)
+    {
+        foreach (var ins in m.Body.Instructions)
+        {
+            if (ins.Operand is MethodReference r)
+            {
+                var d = r.Resolve();
+                if (d == null || !d.IsPublic || !d.DeclaringType.IsPublic) return false;
+            }
+            else if (ins.Operand is FieldReference f)
+            {
+                var d = f.Resolve();
+                if (d == null || !d.IsPublic || !d.DeclaringType.IsPublic) return false;
+            }
+        }
+        return true;
     }
 
     // The wrapper or forwarder that replaces a call to `r`, if any.
