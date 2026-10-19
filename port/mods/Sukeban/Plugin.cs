@@ -7,8 +7,8 @@ using UnityEngine;
 namespace Sukeban
 {
     /// <summary>
-    /// The Sukeban: a delinquent with a nailed bat, Convict's body until her own sprites exist. Her past (the strikeout
-    /// in the bottom of the ninth at Koshien) and her unlock come later.
+    /// The Sukeban: a delinquent with a nailed bat, drawn over Convict's frames (Character/playersheet.png). Her past
+    /// (the strikeout in the bottom of the ninth at Koshien) and her unlock come later.
     /// </summary>
     [BepInPlugin(GUID, NAME, VERSION)]
     [BepInDependency("etgmodding.etg.mtgapi")]
@@ -45,6 +45,7 @@ namespace Sukeban
                 hasAltSkin: false,
                 altSwapperPos: Vector3.zero,
                 paradoxUsesSprites: false);
+            BreachIdle.Add(Character);
             ETGModConsole.Log($"{NAME} v{VERSION} started.");
         }
     }

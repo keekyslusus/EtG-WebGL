@@ -320,13 +320,14 @@ def eye_count(im):
 
 
 def upright(im):
-    """His full-size head above his body (not shrunk into a pit, not lying down)."""
+    """His full-size head above his body (not shrunk into a pit, not lying down, not crouching at the edge)."""
     box = head_box(im)
     suit = pixels_of(im, SUIT_COLORS)
     if box is None or not suit:
         return False
     x0, y0, x1, y1 = box
-    return x1 - x0 >= 9 and y1 <= min(y for _, y in suit) + 1
+    # and not against the frame's left edge (crouching for an item; his hair often reaches the right one)
+    return x1 - x0 >= 9 and y1 <= min(y for _, y in suit) + 1 and x0 >= 1
 
 
 def direction_for(im, facing):
@@ -338,6 +339,8 @@ def direction_for(im, facing):
     if facing in FACING_FRONT:
         if eyes == 2:
             return facing
+        if eyes == 0 and face_skin(im) > 10:
+            return facing + "~"  # facing us, eyes shut (blinking, looking down at the pet)
         return BACK_OF[facing] if eyes == 0 and not strict else None
     return facing if eyes == 0 else None
 
@@ -358,6 +361,25 @@ def anchor(im, direction):
     bottom = max(y for _, y in hair)
     xs = [x for x, y in hair if y >= bottom - 1]
     return ((min(xs) + max(xs)) // 2, bottom)
+
+
+def hair_anchor(im):
+    """The middle of his hair's bottom row (for front views with the eyes shut)."""
+    hair = pixels_of(im, HAIR_ONLY)
+    if not hair:
+        return None
+    bottom = max(y for _, y in hair)
+    xs = [x for x, y in hair if y >= bottom - 1]
+    return ((min(xs) + max(xs)) // 2, bottom)
+
+
+def face_skin(im):
+    """His skin pixels within his head (a front view shows some even with the eyes shut, a back view almost none)."""
+    box = head_box(im)
+    if box is None:
+        return 0
+    x0, y0, x1, y1 = box
+    return len([p for p in pixels_of(im, SKIN_COLORS) if x0 <= p[0] <= x1 and y0 <= p[1] <= y1 + 3])
 
 
 def head_box(im):
@@ -401,9 +423,13 @@ def put(im, x, y, letter):
 
 
 def rebuild(src, direction, refs):
-    """src: Convict's frame. Returns Sukeban's frame of the same size."""
+    """src: Convict's frame. Returns Sukeban's frame of the same size. A direction ending in "~": a front view with
+    his eyes shut, placed by his hair instead and drawn with hers shut too."""
     w, h = src.size
-    a = anchor(src, direction)
+    shut = direction.endswith("~")
+    direction = direction.rstrip("~")
+    tmpl, ref_eyes, ref_hair = refs[direction]
+    a = hair_anchor(src) if shut else anchor(src, direction)
     box = head_box(src)
     if a is None or box is None:
         return recolor(src)
@@ -419,6 +445,8 @@ def rebuild(src, direction, refs):
     # his head reaches down to the jaw: three rows under the eyes (front views), a row under the hair (back views)
     if direction in FACING_FRONT and pixels_of(src, {C_EYE}):
         head_bottom = a[1] + 3
+    elif shut:
+        head_bottom = a[1] - (ref_hair[1] - ref_eyes[1]) + 3  # where his eyes would be, as in the reference
     else:
         head_bottom = y1 + 1
     for y in range(h):
@@ -435,10 +463,12 @@ def rebuild(src, direction, refs):
             out.putpixel((x, y), p)
     body(out, src, direction, top, bottom)
     # head
-    tmpl, ref_anchor = refs[direction]
+    ref_anchor = ref_hair if shut else ref_eyes
     dx, dy = a[0] - ref_anchor[0], a[1] - ref_anchor[1]
     for ty, row in enumerate(tmpl):
         for tx, letter in enumerate(row):
+            if letter == "E" and shut:
+                letter = "s"  # shut eyes: a lid line
             if letter != ".":
                 put(out, tx + dx, ty + dy, letter)
     return out
@@ -521,6 +551,48 @@ def body(out, src, direction, top, bottom):
                 out.putpixel((x, y), RECOLOR[p[:3]] + (p[3],))
 
 
+# Her own Breach idle: she looks down and scuffs the floor with a geta. Drawn over her select_idle frame (the
+# breathing one with the lowered head) into atlas slots of his lighter / smoking idles, which she doesn't play
+# (Alexandria gives custom characters no idle phases; Plugin.cs adds this one). Plugin.cs names the same slots.
+SCUFF_BASE = "convict_select_idle_003"
+SCUFF_SLOTS = {
+    "in1": "convict_select_light_up_001",
+    "in2": "convict_select_light_up_002",
+    "hold1": "convict_select_light_up_003",
+    "hold2": "convict_select_light_up_004",
+    "hold3": "convict_select_light_up_005",
+    "hold4": "convict_select_light_up_006",
+}
+DUST = {"d": (204, 178, 136), "e": (160, 132, 96)}
+
+
+def scuff_frames(base):
+    """{slot key: frame}. base: her select_idle frame with the lowered head (eyes on row 16, x 8 and 14)."""
+    def edit(im, changes):
+        out = im.copy()
+        for x, y, letter in changes:
+            if letter == ".":
+                out.putpixel((x, y), (0, 0, 0, 0))
+            elif letter in DUST:
+                out.putpixel((x, y), DUST[letter] + (255,))
+            else:
+                put(out, x, y, letter)
+        return out
+
+    # eyes half-lowered (lids), then looking down at her feet (the far eye stays on the skin, left of the hair)
+    half = edit(base, [(8, 16, "s"), (14, 16, "s"), (8, 17, "E"), (13, 17, "E")])
+    down = edit(base, [(8, 16, "S"), (14, 16, "S"), (8, 17, "E"), (13, 17, "E")])
+    # the right geta (x 11-12 at rest) swings out from under the skirt and back; the hem follows, dust flies
+    rest = [(11, 27, "."), (12, 27, ".")]
+    hold1 = edit(down, rest + [(13, 27, "t"), (14, 27, "T"), (14, 26, "k")])
+    hold2 = edit(down, rest + [(14, 27, "t"), (15, 27, "T"), (14, 26, "k"), (15, 26, "k"),
+                               (16, 27, "e"), (17, 27, "d"), (17, 26, "d"), (18, 25, "e")])
+    hold3 = edit(down, rest + [(12, 27, "t"), (13, 27, "T"), (14, 26, "k"),
+                               (18, 26, "e"), (19, 25, "d"), (18, 24, "d")])
+    hold4 = edit(down, [(19, 23, "e"), (20, 24, "e")])
+    return {"in1": half, "in2": down, "hold1": hold1, "hold2": hold2, "hold3": hold3, "hold4": hold4}
+
+
 def main(argv):
     preview = argv[argv.index("--preview") + 1] if "--preview" in argv else None
     defs = tk2d.definitions(os.path.join(COLLECTION, "Convict.prefab"))
@@ -537,13 +609,16 @@ def main(argv):
         src, mode = normalize(raw)
         if direction is None and mode[0] == "mul" and mode[1] < 1.0:
             return recolor_faded(raw)
+        if direction in FACING_FRONT and eye_count(src) == 0 and face_skin(src) > 10:
+            direction += "~"  # his eyes shut in a front view (a blink)
         return shift(rebuild(src, direction, refs) if direction else recolor(src), mode)
 
     refs = {}
     for direction, (ref_name, art) in HEADS.items():
         rows = art.strip("\n").split("\n")
         assert all(len(r) == 22 for r in rows), direction
-        refs[direction] = (rows, anchor(frame(by_name[ref_name]), direction))
+        ref = frame(by_name[ref_name])
+        refs[direction] = (rows, anchor(ref, direction), hair_anchor(ref))
 
     sheet = atlas.copy()
     done = {}
@@ -567,6 +642,9 @@ def main(argv):
                 direction = direction_for(src, facing)
                 if direction:
                     done[sprite_id] = build(sprite_id, direction)
+    scuff = scuff_frames(done[by_name[SCUFF_BASE].index])
+    for key, slot in SCUFF_SLOTS.items():
+        done[by_name[slot].index] = scuff[key]
     for d in defs:
         if not d.uvs:
             continue
@@ -581,6 +659,13 @@ def main(argv):
         os.makedirs(preview, exist_ok=True)
         rows = [c for names in DIRECTIONS.values() for c in names] + list(DODGE_ENDS) + list(OTHER_CLIPS) + [
             "select_light", "select_smoke_idle", "pitfall", "pitfall_down", "timefall", "ghost_idle_front", "slide_right"]
+        # her Breach idle, as Plugin.cs plays it: in, hold x2, out
+        scuff_seq = ["in1", "in2"] + ["hold1", "hold2", "hold3", "hold4"] * 2 + ["in2", "in1"]
+        strip = Image.new("RGBA", (len(scuff_seq) * 26 * 6, 30 * 6), (58, 52, 50, 255))
+        for k, key in enumerate(scuff_seq):
+            im = scuff_frames(done[by_name[SCUFF_BASE].index])[key]
+            strip.alpha_composite(im.resize((im.width * 6, im.height * 6), Image.NEAREST), (k * 26 * 6, 0))
+        strip.save(os.path.join(preview, "sukeban_scuff.png"))
         sc, cw, ch = 4, 26 * 4, 58 * 4
         img = Image.new("RGBA", (25 * cw, len(rows) * ch), (58, 52, 50, 255))
         for r, clip in enumerate(rows):

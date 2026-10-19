@@ -370,6 +370,48 @@ namespace EtgModSmoke
                 s.notes.Add(c.name + ": select flag at " + flag.transform.position.ToString() + ", " +
                             (flag.gameObject.activeInHierarchy && r != null && r.enabled ? "visible" : "not visible") +
                             (flag.CanBeSelected() ? ", selectable" : ", not selectable"));
+                yield return IdlePhases(s, c, flag);
+            }
+        }
+
+        // The character's own Breach idles (CharacterSelectIdleDoer phases): their clips must be in the flag's library.
+        // Each hold animation is played on the spot and screenshot (<report dir>/breach-<character>-phase<N>.png).
+        private IEnumerator IdlePhases(StepResult s, StepResult c, FoyerCharacterSelectFlag flag)
+        {
+            CharacterSelectIdleDoer doer = flag.GetComponent<CharacterSelectIdleDoer>();
+            if (doer == null || doer.phases == null)
+            {
+                s.notes.Add(c.name + ": no idle doer");
+                yield break;
+            }
+            s.notes.Add(c.name + ": core idle " + doer.coreIdleAnimation + ", " + doer.phases.Length + " idle phases");
+            for (int i = 0; i < doer.phases.Length; i++)
+            {
+                CharacterSelectIdlePhase phase = doer.phases[i];
+                List<string> missing = new List<string>();
+                foreach (string clip in new[] { phase.inAnimation, phase.holdAnimation, phase.outAnimation })
+                {
+                    if (!string.IsNullOrEmpty(clip) && flag.spriteAnimator.GetClipByName(clip) == null)
+                    {
+                        missing.Add(clip);
+                    }
+                }
+                if (missing.Count > 0)
+                {
+                    s.notes.Add(c.name + " phase " + i + ": clips missing from the library: " + Join(missing));
+                    s.status = "failed";
+                    continue;
+                }
+                if (string.IsNullOrEmpty(phase.holdAnimation))
+                {
+                    continue;
+                }
+                flag.spriteAnimator.Play(phase.holdAnimation);
+                yield return Wait(0.3f);
+                string file = "breach-" + c.id + "-phase" + i + ".png";
+                ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(m_reportDir, file));
+                s.notes.Add(c.name + " phase " + i + ": " + phase.inAnimation + " / " + phase.holdAnimation + " / " + phase.outAnimation + ", screenshot " + file);
+                yield return Wait(0.3f);
             }
         }
     }

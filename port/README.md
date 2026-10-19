@@ -277,8 +277,17 @@ resources), on Convict's frames; the past and the unlock come later.
   long skirt over the legs, geta. So do the upright frames of the other clips facing the way the clip says
   (table kicks, item get, jetpack, doorway, chest, spin, the start of death, the Breach idles). Frames come with
   slightly-off colors, darkened (doorway: per pixel by hue then) or lit (petting): they are snapped to his palette
-  first and the shift is redone on hers. Recolored only: the rolling dodge frames, lying / shrinking frames
-  (pitfall, spit_out), ghosts, and the Breach's smoking / lighter idles (his poses until hers are designed).
+  first and the shift is redone on hers. A front view without his eyes but with his face (a blink, looking down at
+  the pet) gets her front head with the eyes shut, placed by his hair (it once got the back of her head: she
+  "turned around" for a blink in the Breach). Recolored only: the rolling dodge frames, lying / shrinking frames
+  (pitfall, spit_out), crouching at the frame's edge (item get) and ghosts.
+- **Breach idle** (`BreachIdle.cs`): her select flag is a copy of Convict's with his idle phases (Alexandria copies a
+  character's own phases onto it only for `newspritesetup` sprites). Crossing the arms stays (redrawn); his lighter /
+  smoking / trash phase is swapped by a Harmony postfix on `Foyer.SetUpCharacterCallbacks` (after Alexandria's) for
+  hers: looks down (`sukeban_scuff_in`), scuffs the floor with a geta (`sukeban_scuff`, loop 2.5-5 s), looks up
+  (`sukeban_scuff_out`). Its six frames are drawn by build_sheet.py (`SCUFF_SLOTS`) into the atlas slots of his
+  lighter idle; the clips are added to her library at start. The smoke
+  test's `breach` step checks every character's phases against the flag's library and screenshots each hold.
   `tools/extract_frames.py` cuts a collection into PNGs for reference.
 
 - **Ninth Inning** (`skb:ninth_inning`): a copy of gun 616, the nailed Casey that the #NAILBAT synergy ("Careful
@@ -383,7 +392,8 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
 5. every mod character (MtG API's `ETGModConsole.Characters` beyond the game's twelve, where Alexandria's CharacterAPI
    registers them) is switched to like the `character` command; its starting guns / items, health and armor are
    noted, its actives used and its gun swung charged at an enemy bullet put in front of it, with the player stats each
-   changed. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`).
+   changed. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
+   and idle phases (clips present; each hold played and screenshot).
 
 Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting
 enemies, dynamic batching is switched on and off through the player settings (restored after) and `UnityStats` draw
