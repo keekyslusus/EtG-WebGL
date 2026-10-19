@@ -308,6 +308,10 @@ resources), on Convict's frames; the past and the unlock come later.
   `tools/facecards.py` (variants; `CHOSEN` = the glare with the kugibatto behind her head). Alexandria adds it to the
   conversation bar's atlas as `PlayerSukeban_facecard`; the smoke test's character step checks it is there and cuts it
   out to `<character>-portrait.png`.
+- **Breach card** (`Character/foyercard/`, the card over her when you walk up): `tools/foyercard.py` frames the
+  portrait like the game's cards (38 x 38) and builds the flip-in (11 frames: the game's own edges and back, her
+  front squeezed for the halves; sizes as the Gunslinger's, whose geometry Alexandria copies) and a 4-frame idle with
+  a glint running down her hair. The smoke test's breach step opens each character's card and screenshots it.
 - Names and descriptions in English and Russian. Placeholder icons: `tools/placeholder_sprites.py`.
 
 ### Expand the Gungeon (mods with their own AssetBundles, sound banks and shaders)

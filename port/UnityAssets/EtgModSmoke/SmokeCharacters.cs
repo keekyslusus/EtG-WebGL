@@ -404,7 +404,42 @@ namespace EtgModSmoke
                             (flag.gameObject.activeInHierarchy && r != null && r.enabled ? "visible" : "not visible") +
                             (flag.CanBeSelected() ? ", selectable" : ", not selectable"));
                 yield return IdlePhases(s, c, flag);
+                yield return Card(s, c, flag);
             }
+        }
+
+        // The card over the flag (what walking up to it shows): its appear / idle clips, a screenshot once it is up
+        // (<report dir>/breach-<character>-card.png).
+        private IEnumerator Card(StepResult s, StepResult c, FoyerCharacterSelectFlag flag)
+        {
+            if (flag.OverheadElement == null)
+            {
+                s.notes.Add(c.name + ": no card (OverheadElement)");
+                yield break;
+            }
+            FoyerInfoPanelController panel = flag.CreateOverheadElement();
+            flag.ToggleOverheadElementVisibility(true);
+            CharacterSelectFacecardIdleDoer card = panel == null ? null : panel.GetComponentInChildren<CharacterSelectFacecardIdleDoer>(true);
+            if (card == null)
+            {
+                s.notes.Add(c.name + ": card without a facecard animator");
+            }
+            else
+            {
+                tk2dSpriteAnimator anim = card.GetComponent<tk2dSpriteAnimator>();
+                bool ok = anim != null && anim.GetClipByName(card.appearAnimation) != null && anim.GetClipByName(card.coreIdleAnimation) != null;
+                s.notes.Add(c.name + ": card " + card.appearAnimation + " / " + card.coreIdleAnimation + (ok ? "" : " (clips missing)"));
+                if (!ok)
+                {
+                    s.status = "failed";
+                }
+            }
+            yield return Wait(1.5f);
+            string file = "breach-" + c.id + "-card.png";
+            ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(m_reportDir, file));
+            s.notes.Add(c.name + ": card screenshot " + file);
+            yield return Wait(0.3f);
+            flag.ClearOverheadElement();
         }
 
         // The character's own Breach idles (CharacterSelectIdleDoer phases): their clips must be in the flag's library.
