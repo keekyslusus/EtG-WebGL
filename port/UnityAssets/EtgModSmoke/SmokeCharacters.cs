@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using Dungeonator;
 using UnityEngine;
 
 // Phase "characters": the playable characters mods add (Alexandria's CharacterAPI registers them with Mod the
@@ -205,7 +206,77 @@ namespace EtgModSmoke
                 s.notes.Add("after the charged attack: " + StatChanges(beforeSwing, Stats(p)));
             }
 
+            yield return ActivesAcrossRooms(s);
             yield return SwitchAndSettle(s, "pilot");
+        }
+
+        private const int CharacterRoomVisits = 5;
+
+        // What an active leaves in the world may look different by room and tileset: use the actives in a few rooms of
+        // the floor and save a screenshot of each (<report dir>/<character>-room<N>.png) for a look.
+        private IEnumerator ActivesAcrossRooms(StepResult s)
+        {
+            PlayerController p = Player;
+            if (p == null || p.activeItems.Count == 0 || GameManager.Instance.Dungeon == null)
+            {
+                yield break;
+            }
+            int visited = 0;
+            List<string> shots = new List<string>();
+            foreach (RoomHandler room in new List<RoomHandler>(GameManager.Instance.Dungeon.data.rooms))
+            {
+                p = Player;
+                if (visited >= CharacterRoomVisits || p == null || GameManager.Instance.IsLoadingLevel)
+                {
+                    break;
+                }
+                if (room == null || room == p.CurrentRoom || (room.area != null && room.area.PrototypeRoomCategory == PrototypeDungeonRoom.RoomCategory.BOSS))
+                {
+                    continue;
+                }
+                IntVector2? cell = room.GetRandomAvailableCell(new IntVector2(4, 4), CellTypes.FLOOR, false, null);
+                if (!cell.HasValue)
+                {
+                    continue;
+                }
+                Act("warp to " + room.GetRoomName());
+                p.WarpToPoint(cell.Value.ToVector2() + new Vector2(2f, 2f), false, false);
+                visited++;
+                yield return Wait(0.75f);
+                if (p.CurrentRoom != null)
+                {
+                    List<AIActor> enemies = p.CurrentRoom.GetActiveEnemies(RoomHandler.ActiveEnemyType.All);
+                    if (enemies != null)
+                    {
+                        foreach (AIActor a in enemies.ToArray())
+                        {
+                            if (a != null && a.healthHaver != null && !a.healthHaver.IsBoss)
+                            {
+                                a.EraseFromExistence(true);
+                            }
+                        }
+                    }
+                }
+                foreach (PlayerItem item in p.activeItems.ToArray())
+                {
+                    if (item == null)
+                    {
+                        continue;
+                    }
+                    item.ClearCooldowns();
+                    SelectedItemIndex.SetValue(p, p.activeItems.IndexOf(item));
+                    if (item.CanBeUsed(p))
+                    {
+                        s_useItem.Invoke(p, null);
+                    }
+                }
+                yield return Wait(0.6f);
+                string file = s.id + "-room" + visited + ".png";
+                ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(m_reportDir, file));
+                shots.Add(file + " (" + room.GetRoomName() + ")");
+                yield return Wait(0.4f);
+            }
+            s.notes.Add("actives used in " + visited + " rooms, screenshots: " + Join(shots));
         }
 
         // A plain bullet (38 Special's) aimed at the player, just past the gun's barrel: what a charged bat reflects.

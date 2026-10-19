@@ -88,23 +88,51 @@ kNNk............
 .kk.............
 """
 
-# The floor patch Koshien Dirt leaves behind: a heap of stadium dirt with home plate on it (seen from above,
-# squashed like EtG's floor decals).
-HOME_BASE = """
-...........kkkkkkkkkk...........
-.......kkkkddfdddefdddkkkk......
-....kkkdddfddeddddddfddddekkk...
-..kkddefddddddWWWWdddddfdddddkk.
-.kdddddddedddWWWWWWdddeddddfddk.
-kddfdddddddddWWWWWWddddddddddedk
-kdeddddfdddddWWWWWWdddfddddddddk
-kddddddddddddwWWWWwddddddddfdddk
-.kddfdddeddddddwWwddddddeddddddk
-.kkdddddddfddddddwddddddddddfdk.
-...kkdddedddddddddddfdddddedkk..
-.....kkkkddfddddeddddddkkkkk....
-..........kkkkkkkkkkkkk.........
-"""
+# The floor patch Koshien Dirt leaves behind: a heap of stadium dirt with home plate on it, seen from above and
+# squashed like EtG's floor (3 x 1.5 tiles; KoshienDirt.cs uses the same ellipse for the zone).
+HOME_BASE_SIZE = (48, 24)
+
+
+def home_base():
+    import random
+    w, h = HOME_BASE_SIZE
+    rnd = random.Random(9)  # same speckles every run
+    rx, ry = w / 2 - 0.5, h / 2 - 0.5
+    cx, cy = (w - 1) / 2, (h - 1) / 2
+    rows = []
+    for y in range(h):
+        row = ""
+        for x in range(w):
+            d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
+            # a ragged edge: dirt thrown, not drawn
+            edge = 1.0 - 0.12 * rnd.random()
+            if d > edge:
+                row += "."
+            elif d > edge - 0.16:
+                row += "k"
+            else:
+                r = rnd.random()
+                row += "e" if r < 0.18 else "f" if r < 0.34 else "d"
+        rows.append(list(row))
+    # home plate: flat side up, point toward the pitcher's mound (down), 12 px wide
+    plate = [
+        "kkkkkkkkkkkk",
+        "kWWWWWWWWWWk",
+        "kWWWWWWWWWWk",
+        "kWWWWWWWWWWk",
+        "kwWWWWWWWWwk",
+        ".kwWWWWWWwk.",
+        "..kwWWWWwk..",
+        "...kwWWwk...",
+        "....kwwk....",
+        ".....kk.....",
+    ]
+    ox, oy = w // 2 - 6, h // 2 - 5
+    for py, line in enumerate(plate):
+        for px, c in enumerate(line):
+            if c != ".":
+                rows[oy + py][ox + px] = c
+    return "\n".join("".join(r) for r in rows)
 
 
 def draw(art, path):
@@ -126,7 +154,7 @@ def main():
     loadout = os.path.join(MOD, "Character", "loadoutsprites")
     draw(KOSHIEN_DIRT, os.path.join(res, "koshien_dirt.png"))
     draw(ELBOW_GUARD, os.path.join(res, "elbow_guard.png"))
-    draw(HOME_BASE, os.path.join(res, "koshien_base.png"))
+    draw(home_base(), os.path.join(res, "koshien_base.png"))
     draw(NINTH_INNING_ICON, os.path.join(loadout, "loadout_ninth_inning.png"))
     draw(KOSHIEN_DIRT, os.path.join(loadout, "loadout_koshien_dirt.png"))
     draw(ELBOW_GUARD, os.path.join(loadout, "loadout_elbow_guard.png"))

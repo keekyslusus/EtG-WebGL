@@ -9,7 +9,10 @@ namespace Sukeban
     /// </summary>
     public class KoshienDirt : PlayerItem
     {
-        public const float Radius = 1.6f;
+        // The zone is the sprite's ellipse (48 x 24 px = 3 x 1.5 tiles), a bit generous: the player's feet are a point.
+        public const float HalfWidth = 1.5f;
+        public const float HalfHeight = 0.75f;
+        public const float Leniency = 1.15f;
         public const float Duration = 15f;
         public const float ChargeMultiplier = 2f;
         public const float DamageCooldown = 450f;
@@ -77,21 +80,37 @@ namespace Sukeban
 
             m_sprite = GetComponent<tk2dBaseSprite>();
             m_sprite.PlaceAtPositionByAnchor(center, tk2dBaseSprite.Anchor.MiddleCenter);
-            // Flat on the floor under everything, like a destroyed column (BreakableColumn).
+            // Flat on the floor under the actors, the way a landed supply crate (EmergencyCrateController) and corpses
+            // lie: FG_Critical layer in the Background sorting layer. On BG_Critical the floor itself could cover it.
+            gameObject.layer = LayerMask.NameToLayer("FG_Critical");
+            m_sprite.renderer.sortingLayerName = "Background";
             m_sprite.IsPerpendicular = false;
-            m_sprite.HeightOffGround = -1.95f;
+            m_sprite.HeightOffGround = -1f;
             m_sprite.UpdateZDepth();
-            gameObject.layer = LayerMask.NameToLayer("BG_Critical");
-            DepthLookupManager.AssignRendererToSortingLayer(m_sprite.renderer, DepthLookupManager.GungeonSortingLayer.BACKGROUND);
+            m_sprite.color = OffBase;
+        }
+
+        // Dimmed while nobody stands on it, full color while its owner is "on base".
+        private static readonly Color OffBase = new Color(0.7f, 0.7f, 0.7f, 0.85f);
+
+        private bool OwnerOnBase()
+        {
+            Vector2 d = m_owner.specRigidbody.UnitBottomCenter - m_center;
+            float x = d.x / (KoshienDirt.HalfWidth * KoshienDirt.Leniency);
+            float y = d.y / (KoshienDirt.HalfHeight * KoshienDirt.Leniency);
+            return x * x + y * y <= 1f;
         }
 
         private void Update()
         {
             m_remaining -= BraveTime.DeltaTime;
-            bool onBase = m_remaining > 0f && m_owner && !m_owner.healthHaver.IsDead
-                && Vector2.Distance(m_owner.specRigidbody.UnitBottomCenter, m_center) <= KoshienDirt.Radius;
+            bool onBase = m_remaining > 0f && m_owner && !m_owner.healthHaver.IsDead && OwnerOnBase();
+            if (onBase && !m_applied)
+            {
+                AkSoundEngine.PostEvent("Play_OBJ_power_up_01", gameObject);
+            }
             SetApplied(onBase);
-            m_sprite.color = onBase ? new Color(1.2f, 1.2f, 1.1f) : Color.white;
+            m_sprite.color = onBase ? Color.white : OffBase;
             if (m_remaining < 2f)
             {
                 // Blink out over the last two seconds.
