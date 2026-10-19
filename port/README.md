@@ -299,6 +299,10 @@ ApacheThunder's Expand the Gungeon 3.0.8 brings three Windows AssetBundles (`exp
 - **Portable Ship** (mod bug, also on Steam; `Patcher` `NullSafeCalls` -> `WebShim.ModFixes`): `ResetConfig` (drop,
   destroy) clears `LaserShootPoints`, which only exists once the ship was used, so an unused Portable Ship threw
   NullReferenceException. In a release WebGL build (no null checks) such a call can take the runtime down.
+- **Corrupted enemies on glitch floors** (mod bug, also on Steam; `Patcher` `SpriteIdClamps`): `ApplyCustomTexture` gives a
+  BulletMan copy an NPC's sprite collection (15-153 sprites) but keeps sprite ID 363; tk2d only clamps an ID that
+  changes, so unless the sprite counted as off-screen `AIShooter.Initialize` threw IndexOutOfRange in
+  `GetUntrimmedBounds`. The ID is clamped to the new collection.
 - `Patcher verify` also fails on a branch whose target isn't an instruction (a short branch overflowed by inserted code
   crashes il2cpp after 20 minutes) and on a parameter with HasDefault but no Constant (the editor's Mono aborts in
   `GetParameters()` on any stack trace through it; seen with 2017.4's Mono 2.x). `bash port/monosigcheck.sh` checks the

@@ -18,7 +18,8 @@ CGIncludes 6.6 — 3068/3068), бандлы (EtG Web → 3, данные FullIns
 - jslib под Emscripten 4 (`UTF8ToString`, `__sig`, `ptrToIdx`) в браузере ещё не проверен: звук, геймпад,
   `FS.syncfs`.
 - `?smoketest` сделан и прогнан (`port/tasks/webgl-smoketest.md`): все фазы проходят, ошибок порта / IL2CPP нет;
-  открыто там же — `GetUntrimmedBounds` на glitch-этажах и одно неповторившееся падение рантайма.
+  `GetUntrimmedBounds` на glitch-этажах и NRE Portable Ship исправлены (баги мода); открыто там же одно
+  неповторившееся падение рантайма.
 - Память с модами в пределах 4 ГБ; wasm64 включать, только если не хватит (Chrome/Edge 128+, Firefox 129+, Safari нет).
 - Страница на настоящей игре: полноэкранный режим игры (переопределённый `canvas.requestFullscreen` — зовёт ли его
   6.6), ввод (Esc, keyboard lock), F3/F4-монитор (`Etg.gl()`). `serve-webbuild.ps1 -Dir webbuild6`.

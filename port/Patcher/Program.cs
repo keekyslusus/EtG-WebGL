@@ -159,6 +159,19 @@ internal static partial class Program
             "WebShim.ModFixes", "ClearIfNotNull", "System.Collections.IList"),
     };
 
+    // Mod bug fix (also in the Steam game, hidden there by chance): in <Type>::<Method>(<FirstParameterType>, ...) the one
+    // `SetSprite(<collection parameter>, spriteId)` gets its sprite ID clamped to that collection's size
+    // (WebShim.ModFixes.ClampIndex).
+    // - Expand's glitch floors turn items into "corrupted" enemies (ExpandEnemyCorruptor.SpawnGlitchedObjectAsEnemy): a
+    //   BulletMan copy gets an NPC's sprite collection (15-153 sprites) but keeps BulletMan's sprite ID 363. tk2d's
+    //   spriteId setter clamps only when the ID changes, so 363 stayed unless the sprite counted as invisible (a
+    //   deferred off-screen update fixes it) and AIShooter.Initialize -> GetUntrimmedBounds threw IndexOutOfRange
+    //   (Play Mode and the WebGL player, ?smoketest; the enemy's gun wasn't set up).
+    private static readonly (string Type, string Method, string FirstParameterType, string CollectionParameter)[] SpriteIdClamps =
+    {
+        ("ExpandTheGungeon.ExpandUtilities.ExpandUtility", "ApplyCustomTexture", "AIActor", "prebuiltCollection"),
+    };
+
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
     // errors where something IL2CPP-specific may go wrong. Logging only, behaviour unchanged.
     private static readonly (string Type, string Method)[] LogSwallowedExceptions =
@@ -419,6 +432,36 @@ internal static partial class Program
                     throw new InvalidOperationException($"{typeName}.{methodName}: expected {expected} calls to {calledType}::{calledMethod}, found {count}");
                 }
                 report.Count($"null-safe {calledMethod} -> {shimType}.{shimMethod}: {typeName}.{methodName}");
+            }
+        }
+        foreach (var (typeName, methodName, firstParameterType, collectionParameter) in SpriteIdClamps)
+        {
+            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody
+                && m.Parameters.Count > 0 && m.Parameters[0].ParameterType.FullName == firstParameterType) ?? [])
+            {
+                var collection = method.Parameters.Single(p => p.Name == collectionParameter);
+                var calls = method.Body.Instructions.Where(i => i.OpCode.Code is Code.Call or Code.Callvirt
+                    && i.Operand is MethodReference m && m.Name == "SetSprite" && m.Parameters.Count == 2
+                    && m.Parameters[0].ParameterType.FullName == "tk2dSpriteCollectionData"
+                    && m.Parameters[1].ParameterType.FullName == "System.Int32").ToList();
+                if (calls.Count != 1)
+                {
+                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one SetSprite(collection, int), found {calls.Count}");
+                }
+                var definitions = module.GetMemberReferences().OfType<FieldReference>()
+                    .First(f => f.Name == "spriteDefinitions" && f.DeclaringType.FullName == "tk2dSpriteCollectionData");
+                var clamp = module.ImportReference(shim.Find("WebShim.ModFixes", "ClampIndex", ["System.Int32", "System.Int32"]));
+                method.Body.SimplifyMacros();
+                var il = method.Body.GetILProcessor();
+                // [sprite, collection, id] -> [sprite, collection, ClampIndex(id, <collection parameter>.spriteDefinitions.Length)]
+                var call = calls[0];
+                il.InsertBefore(call, il.Create(OpCodes.Ldarg, collection));
+                il.InsertBefore(call, il.Create(OpCodes.Ldfld, definitions));
+                il.InsertBefore(call, il.Create(OpCodes.Ldlen));
+                il.InsertBefore(call, il.Create(OpCodes.Conv_I4));
+                il.InsertBefore(call, il.Create(OpCodes.Call, clamp));
+                method.Body.OptimizeMacros();
+                report.Count($"sprite ID clamped to {collectionParameter}: {typeName}.{methodName}");
             }
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)

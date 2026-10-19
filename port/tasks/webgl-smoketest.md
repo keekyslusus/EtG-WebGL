@@ -21,15 +21,21 @@
 - `UnloadAsset can only be used on assets` (игровой `PostDungeonGenerationCleanup`) есть и в плеере → перенесено из
   `playmode` в известный шум (`SmokeLog.Noise`).
 
+## Исправлено после прогона
+
+Баги мода, есть и в Steam; исправлены при запекании (`Patcher` → `WebShim.ModFixes`, `port/README.md`, Mods):
+- `IndexOutOfRangeException` в `tk2dBaseSprite.GetUntrimmedBounds` у «испорченных» врагов glitch-этажей. Мод
+  (`ExpandUtility.ApplyCustomTexture` с `prebuiltCollection`) даёт копии BulletMan набор спрайтов NPC (15–153 штуки), но
+  оставляет номер 363; сеттер `spriteId` в tk2d обрезает номер только при его смене, так что 363 оставался, если спрайт
+  не считался невидимым (тогда номер исправляет отложенное обновление). Поэтому в Steam (проверка 2026-10-18, ветка
+  `mods`, `port/tasks/mod-smoke-test.md`) ошибки не было, а в Play Mode и в плеере была. `SpriteIdClamps` обрезает номер
+  до размера набора: `?smoketest=flows&only=glitch,apache` — 0 вместо 47.
+- `PortableShip.ResetConfig` → `LaserShootPoints.Clear()` NRE у ни разу не использованного Portable Ship (при
+  выбрасывании и уничтожении) — `NullSafeCalls`; `?smoketest=items&only=portable_ship,pow_block` — оба ok.
+
 ## Открыто
 
-1. **`IndexOutOfRangeException` в `tk2dBaseSprite.GetUntrimmedBounds`** (`AIShooter.Initialize` ← `AIActor.Awake` ←
-   `FakePrefabHooks.InstantiateOPR`) у «испорченных» врагов glitch-этажей (`Custom_Glitch*`, `Apache_Fucking_Around`):
-   в плеере тоже (47 раз, 7 шагов), а в Steam, по прежней проверке, нет. Значит, не особенность редактора, а отличие
-   порта: сравнить `spriteId` / коллекцию спрайтов, которые строит `ExpandUtility` (`BuildSpriteCollection`,
-   `ApplyCustomTexture`), в плеере и в Steam (r2modman, `expand debug stats`, F2 `load_flow`). Возможный обход в
-   порте — обрезать номер спрайта, но сначала найти причину.
-2. **Падение рантайма (abort) один раз** на `floor:tt_backrooms` в первом прогоне enemies,floors,flows (после 31
+1. **Падение рантайма (abort) один раз** на `floor:tt_backrooms` в первом прогоне enemies,floors,flows (после 31
    врага); причина ушла из буфера консоли. Отдельно `tt_backrooms` и повторный полный прогон — без падения. Теперь страница
    при abort сохраняет последние 400 строк консоли в `console.txt` и продолжает тест — если повторится, смотреть его
    (подозрение — память: куча 512 → 4096 МБ, растёт геометрически).
