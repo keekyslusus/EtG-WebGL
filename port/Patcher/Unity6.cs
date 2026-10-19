@@ -81,6 +81,48 @@ internal static partial class Program
         }
     }
 
+    /// <summary>Assembly scopes of the types the method bodies' operands use (member owners, signatures).</summary>
+    private static IEnumerable<IMetadataScope> ScopesUsedInBodies(ModuleDefinition module)
+    {
+        IEnumerable<TypeReference> Types(TypeReference? t)
+        {
+            for (; t != null; t = (t as TypeSpecification)?.ElementType)
+            {
+                if (t is GenericInstanceType generic)
+                {
+                    foreach (var argument in generic.GenericArguments.SelectMany(Types))
+                    {
+                        yield return argument;
+                    }
+                }
+                if (t is not TypeSpecification)
+                {
+                    yield return t;
+                }
+            }
+        }
+        foreach (var method in AllTypes(module).SelectMany(t => t.Methods).Where(m => m.HasBody))
+        {
+            foreach (var ins in method.Body.Instructions)
+            {
+                IEnumerable<TypeReference> types = ins.Operand switch
+                {
+                    MethodReference m => Types(m.DeclaringType).Concat(Types(m.ReturnType)).Concat(m.Parameters.SelectMany(p => Types(p.ParameterType))),
+                    FieldReference f => Types(f.DeclaringType).Concat(Types(f.FieldType)),
+                    TypeReference t => Types(t),
+                    _ => [],
+                };
+                foreach (var type in types)
+                {
+                    if (type.Scope != null && type is not GenericParameter)
+                    {
+                        yield return type.Scope;
+                    }
+                }
+            }
+        }
+    }
+
     private static void RetargetForUnity6(ModuleDefinition module, Report report)
     {
         foreach (var reference in module.AssemblyReferences)
@@ -123,7 +165,13 @@ internal static partial class Program
             }
         }
         // An engine module nothing points to any more (the API updater would remove it, i.e. rewrite the DLL).
+        // GetTypeReferences only lists the TypeRef rows read from the file: references imported in this run (a shim
+        // method's parameter types, e.g. UnityEngine.Object of DestroyShim.Destroy) count through the IL operands.
         var used = module.GetTypeReferences().Select(t => t.Scope).ToHashSet();
+        foreach (var scope in ScopesUsedInBodies(module))
+        {
+            used.Add(scope);
+        }
         foreach (var reference in module.AssemblyReferences.Where(r => r.Name.StartsWith("UnityEngine.") && !used.Contains(r)).ToList())
         {
             module.AssemblyReferences.Remove(reference);

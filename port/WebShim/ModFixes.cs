@@ -15,21 +15,6 @@ namespace WebShim
             return index < 0 || count <= 0 ? 0 : index >= count ? count - 1 : index;
         }
 
-        /// <summary>
-        /// <c>Object.Destroy(obj)</c> that first moves <paramref name="keep"/> out of <paramref name="obj"/> (a GameObject)
-        /// if it is still inside: Unity 6 disables the components of everything under a GameObject at the Destroy call,
-        /// even what is reparented before the end of the frame (Patcher DetachBeforeDestroy).
-        /// </summary>
-        public static void DestroyDetaching(UnityEngine.Object obj, UnityEngine.Component keep)
-        {
-            UnityEngine.GameObject go = obj as UnityEngine.GameObject;
-            if (go != null && keep != null && keep.transform != go.transform && keep.transform.IsChildOf(go.transform))
-            {
-                keep.transform.SetParent(go.transform.parent, true);
-            }
-            UnityEngine.Object.Destroy(obj);
-        }
-
         /// <summary><c>list.Clear()</c> that does nothing on null.</summary>
         public static void ClearIfNotNull(IList list)
         {

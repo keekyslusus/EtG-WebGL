@@ -308,12 +308,21 @@ ApacheThunder's Expand the Gungeon 3.0.8 brings three Windows AssetBundles (`exp
   null and bounds checks (`FullWithoutStacktrace`, `EtgWebBuild.ApplyPlayerSettings`): with "explicitly thrown only"
   that call wrote through null and halted the player ("memory access out of bounds"). Builds write
   `Build/<name>.symbols.json` to name the `wasm-function[N]` frames of such a crash.
-- **Item notification in other languages** (Unity 6; `Patcher` `DetachBeforeDestroy`): Unity 6 disables the components of
-  everything under a GameObject at `Object.Destroy`, even what moves out before the frame ends.
-  `GameUIRoot.RemoveControlFromMotionGroups` (UpdateControlMotionGroup: the notification in Russian & co., hearts,
-  blanks) destroyed the old motion-group panel with the control still inside and re-enabled only the control, so the
-  pickup notification showed the item's sprite without box and texts. `WebShim.ModFixes.DestroyDetaching` moves the
-  control out first.
+- **What `Object.Destroy` disables** (Unity 6; `RewriteCalls` -> `WebShim.DestroyShim`, every call in the game and the
+  mods): Unity 6 clears the enabled flag of every component under a destroyed GameObject inside the call, so what is
+  moved out of it before the destruction stays disabled for good. EtG relies on survivors working:
+  `GameUIRoot.RemoveControlFromMotionGroups` destroys a motion-group panel and then moves its control to a new one, so
+  in Russian & co. the pickup notification showed only the item's sprite (box and texts disabled); an IL scan finds ~50
+  more methods in the game and mods that move, re-enable or reactivate objects after `Destroy`. `DestroyShim` notes the
+  enabled behaviours and renderers below the GameObject (not for childless ones), lets Unity destroy it as usual and
+  next frame enables again those that survived. Tried and dropped (full Play Mode smoke test): deferring the destroy
+  (destroyed enemies kept running LateUpdate: `AIBulletBank.LateUpdate` NRE, failed / hung flows) and deactivating at
+  once (stopped the notification's coroutine).
+- **`IntVector2` without boxing** (`Patcher` `EquatableStructs`): it has `Equals(IntVector2)` but doesn't declare
+  `IEquatable<IntVector2>`, so `EqualityComparer<IntVector2>.Default` boxed on every `List.Contains/Remove` and
+  `Dictionary` lookup. The dungeon generator does millions of those in one frame (`DungeonData.ExciseElbows`), and WebGL's
+  GC only runs between frames: big floors (The Backrooms) ran the 4 GB heap out of memory in the release build
+  (`abort("OOM")`). With the interface declared, Backrooms loads in 16 s instead of 24 s in Play Mode as well.
 - `Patcher verify` also fails on a branch whose target isn't an instruction (a short branch overflowed by inserted code
   crashes il2cpp after 20 minutes) and on a parameter with HasDefault but no Constant (the editor's Mono aborts in
   `GetParameters()` on any stack trace through it; seen with 2017.4's Mono 2.x). `bash port/monosigcheck.sh` checks the

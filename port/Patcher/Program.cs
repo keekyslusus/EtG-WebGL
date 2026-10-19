@@ -172,16 +172,14 @@ internal static partial class Program
         ("ExpandTheGungeon.ExpandUtilities.ExpandUtility", "ApplyCustomTexture", "AIActor", "prebuiltCollection"),
     };
 
-    // Unity 6: the one `Object.Destroy(x)` in <Type>::<Method> becomes WebShim.ModFixes.DestroyDetaching(x, arg <KeepArgument>),
-    // which first moves that argument out of x. Unity 6 disables the components of everything under a GameObject at the
-    // Destroy call, even what is moved elsewhere before the frame ends (2017.4 didn't).
-    // - GameUIRoot.RemoveControlFromMotionGroups (via UpdateControlMotionGroup, from UINotificationController.SetWidths
-    //   in languages other than English / Japanese / Korean / Chinese) destroys a control's old motion-group panel while
-    //   the control is still inside it, then moves it to a new one and re-enables only the control: the item pickup
-    //   notification's box and texts stayed disabled, so in Russian only the item's sprite showed.
-    private static readonly (string Type, string Method, int KeepArgument)[] DetachBeforeDestroy =
+    // Structs with a public `bool Equals(T)` that don't declare IEquatable<T>: EqualityComparer<T>.Default is then the
+    // boxing ObjectEqualityComparer, so every List.Contains/IndexOf/Remove and Dictionary lookup allocates. They get the
+    // interface (Equals(T) becomes its implementation). IntVector2: the dungeon generator compares cell positions in one
+    // frame by the million (DungeonData.ExciseElbows: List<IntVector2>.Remove), and WebGL's GC only runs between frames,
+    // so a big floor (The Backrooms, 80-112 rooms) ran the 4 GB heap out of memory in the release build (?smoketest).
+    private static readonly string[] EquatableStructs =
     {
-        ("GameUIRoot", "RemoveControlFromMotionGroups", 1),
+        "IntVector2",
     };
 
     // Methods whose `catch { }` handlers (exception discarded) log what they caught: mods that swallow
@@ -476,26 +474,29 @@ internal static partial class Program
                 report.Count($"sprite ID clamped to {collectionParameter}: {typeName}.{methodName}");
             }
         }
-        foreach (var (typeName, methodName, keepArgument) in DetachBeforeDestroy)
+        foreach (var typeName in EquatableStructs)
         {
-            foreach (var method in module.GetType(typeName)?.Methods.Where(m => m.Name == methodName && m.HasBody) ?? [])
+            var type = module.GetType(typeName);
+            if (type == null)
             {
-                var calls = method.Body.Instructions.Where(i => i.OpCode.Code is Code.Call or Code.Callvirt
-                    && i.Operand is MethodReference m && m.Name == "Destroy" && m.Parameters.Count == 1
-                    && m.DeclaringType.FullName == "UnityEngine.Object").ToList();
-                if (calls.Count != 1)
-                {
-                    throw new InvalidOperationException($"{typeName}.{methodName}: expected one Object.Destroy(Object), found {calls.Count}");
-                }
-                var helper = module.ImportReference(shim.Find("WebShim.ModFixes", "DestroyDetaching", ["UnityEngine.Object", "UnityEngine.Component"]));
-                method.Body.SimplifyMacros();
-                var il = method.Body.GetILProcessor();
-                il.InsertBefore(calls[0], il.Create(OpCodes.Ldarg, method.Parameters[keepArgument - (method.HasThis ? 1 : 0)]));
-                calls[0].OpCode = OpCodes.Call;
-                calls[0].Operand = helper;
-                method.Body.OptimizeMacros();
-                report.Count($"Destroy detaching argument {keepArgument}: {typeName}.{methodName}");
+                continue;
             }
+            var equals = type.Methods.Single(m => m.Name == "Equals" && m.IsPublic && !m.IsStatic && m.Parameters.Count == 1
+                && m.Parameters[0].ParameterType.FullName == type.FullName && m.ReturnType.FullName == "System.Boolean");
+            if (type.Interfaces.Any(i => i.InterfaceType.Name == "IEquatable`1"))
+            {
+                throw new InvalidOperationException($"{typeName} already declares IEquatable");
+            }
+            var open = new TypeReference("System", "IEquatable`1", module, module.TypeSystem.CoreLibrary);
+            open.GenericParameters.Add(new GenericParameter(open));
+            var closed = new GenericInstanceType(open);
+            closed.GenericArguments.Add(type);
+            type.Interfaces.Add(new InterfaceImplementation(closed));
+            equals.IsVirtual = true;
+            equals.IsNewSlot = true;
+            equals.IsFinal = true;
+            equals.IsHideBySig = true;
+            report.Count($"IEquatable<{typeName}> declared (no boxing in EqualityComparer.Default)");
         }
         foreach (var (typeName, methodName) in ReflectionInvokerBodies)
         {
@@ -1013,6 +1014,17 @@ internal static partial class Program
                     replacement = sig == "GetJoystickNames()" && type.FullName == "InControl.UnityInputDeviceManager"
                         ? shim.XInput("GetJoystickNames")
                         : null;
+                    break;
+
+                case "UnityEngine.Object":
+                    // Unity 6 disables a destroyed GameObject's whole hierarchy inside the call; EtG and the mods move or
+                    // re-enable objects after destroying their parent (WebShim.DestroyShim: revives what survived).
+                    replacement = sig switch
+                    {
+                        "Destroy(UnityEngine.Object)" => shim.Find("WebShim.DestroyShim", "Destroy", ["UnityEngine.Object"]),
+                        "Destroy(UnityEngine.Object,System.Single)" => shim.Find("WebShim.DestroyShim", "Destroy", ["UnityEngine.Object", "System.Single"]),
+                        _ => null,
+                    };
                     break;
 
                 case "UnityEngine.Screen":
