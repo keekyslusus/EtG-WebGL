@@ -584,20 +584,37 @@ namespace Sukeban
 
         private void Start()
         {
-            GetComponent<Projectile>().OnHitEnemy += OnHitEnemy;
+            Projectile p = GetComponent<Projectile>();
+            p.OnHitEnemy += OnHitEnemy;
+            p.OnDestruction += OnDestruction;
         }
 
         private bool m_killed;
         private bool m_triplePlay;
 
+        // a home run that hit nothing breaks a grand slam
+        private void OnDestruction(Projectile p)
+        {
+            if (m_hit.Count == 0)
+            {
+                Fungo.HomeRunLanded(p.Owner as PlayerController, false);
+            }
+        }
+
         private void OnHitEnemy(Projectile p, SpeculativeRigidbody body, bool fatal)
         {
+            bool first = m_hit.Count == 0;
             if (body && body.aiActor && !m_hit.Contains(body.aiActor))
             {
                 m_hit.Add(body.aiActor);
             }
             if (p.Owner is PlayerController player)
             {
+                // the first enemy it hits counts toward a grand slam
+                if (first)
+                {
+                    Fungo.HomeRunLanded(player, true);
+                }
                 // the Elbow Guard's rewards: a home run kill, a home run touching three enemies
                 if (fatal && !m_killed)
                 {

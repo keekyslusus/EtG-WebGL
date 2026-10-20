@@ -43,7 +43,9 @@ namespace EtgModSmoke
                     yield return FungoSwing(s, p, fungo, ballType, sweet + off, off);
                 }
                 yield return FungoJuggle(s, p, fungo, ballType, sweet);
-                ArmorNote(s, p, "after the juggle (grand slam)");
+                ArmorNote(s, p, "after the juggle in an empty room (no grand slam: the home runs hit nothing)");
+                yield return FungoGrandSlam(s, p, fungo, ballType, sweet);
+                ArmorNote(s, p, "after the juggle at a Bullet Kin (grand slam)");
                 yield return FungoShoot(s, p, fungo, ballType);
                 ArmorNote(s, p, "after the shot balls (a kill)");
                 yield return GuardReflect(s, p);
@@ -146,7 +148,8 @@ namespace EtgModSmoke
                     m_spawned.Add(kin.gameObject);
                 }
             }
-            yield return Wait(1.5f);
+            // past their spawn-in (invulnerable while it plays)
+            yield return Wait(2.5f);
             yield return WaitForBalls(fungo, 1);
             ArmorNote(s, p, "before the triple play (one armor taken)");
             p.forceAimPoint = p.CenterPosition + new Vector2(5f, 0f);
@@ -272,23 +275,17 @@ namespace EtgModSmoke
 
         // Three balls tossed 0.3 s apart, each hit by a tap (fire down for three frames) at its sweet spot: the quick
         // swing (no charge, no reload while a ball is hittable) must hit all three.
-        private IEnumerator FungoJuggle(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet)
+        private IEnumerator FungoJuggle(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet, AIActor aimAt = null)
         {
             Act("fungo: juggle three balls");
             yield return Wait(3f);
+            yield return WaitForBalls(fungo, 3);
             FieldInfo lastHit = ballType.GetField("LastHit", BindingFlags.Static | BindingFlags.Public);
             List<UnityEngine.Object> balls = new List<UnityEngine.Object>();
             for (int i = 0; i < 3 && fungo.CanBeUsed(p) && !fungo.IsOnCooldown; i++)
             {
-                UseActive(p, fungo);
+                TossBall(p, fungo, ballType, balls);
                 yield return null;
-                foreach (UnityEngine.Object b in UnityEngine.Object.FindObjectsOfType(ballType))
-                {
-                    if (!balls.Contains(b))
-                    {
-                        balls.Add(b);
-                    }
-                }
                 if (i < 2)
                 {
                     yield return Wait(0.3f);
@@ -308,6 +305,15 @@ namespace EtgModSmoke
                     hits.Add("gone");
                     continue;
                 }
+                // where the ball is against her and what the bat is doing, for a tap that misses
+                Vector2 ground = (Vector2)InstanceMember(ball, "m_ground");
+                string state = "ball " + Fmt(Vector2.Distance(ground, p.specRigidbody.UnitBottomCenter)) + " tiles from her feet, player speed " +
+                               Fmt(p.specRigidbody.Velocity.magnitude) + ", bat " + (p.CurrentGun == null ? "none" : p.CurrentGun.IsReloading ? "reloading" : "ready");
+                // home runs knock the target back: aim at where it is now
+                if (aimAt != null)
+                {
+                    p.forceAimPoint = aimAt.CenterPosition;
+                }
                 p.forceFireDown = true;
                 yield return null;
                 p.forceFireDown = false;
@@ -321,7 +327,7 @@ namespace EtgModSmoke
                 yield return Frames(2);
                 object hit = lastHit.GetValue(null);
                 float timing = Convert.ToSingle(StaticMember(ballType, "LastTiming"), CultureInfo.InvariantCulture);
-                hits.Add(hit + (hit.ToString() == "None" ? "" : " " + timing.ToString("+0.000;-0.000", CultureInfo.InvariantCulture)));
+                hits.Add(hit + (hit.ToString() == "None" ? " (" + state + ")" : " " + timing.ToString("+0.000;-0.000", CultureInfo.InvariantCulture)));
             }
             s.notes.Add("fungo juggle: " + balls.Count + " balls tossed, taps: " + Join(hits));
             yield return Wait(1.5f);
@@ -357,17 +363,26 @@ namespace EtgModSmoke
             yield return Frames(2);
         }
 
+        // Tosses a ball and returns it: the freshest ball in the air not seen before (balls left lying on the floor
+        // from earlier don't count).
         private UnityEngine.Object TossBall(PlayerController p, PlayerItem fungo, Type ballType, List<UnityEngine.Object> known)
         {
             UseActive(p, fungo);
             UnityEngine.Object newest = null;
             foreach (UnityEngine.Object b in UnityEngine.Object.FindObjectsOfType(ballType))
             {
-                if (!known.Contains(b))
+                if (known.Contains(b) || (bool)InstanceMember(b, "m_lying"))
                 {
-                    known.Add(b);
+                    continue;
+                }
+                if (newest == null || (float)InstanceMember(b, "m_t") < (float)InstanceMember(newest, "m_t"))
+                {
                     newest = b;
                 }
+            }
+            if (newest != null)
+            {
+                known.Add(newest);
             }
             return newest;
         }
@@ -417,6 +432,40 @@ namespace EtgModSmoke
             s.notes.Add("fungo strikeout: " + Join(taps) + "; then " + shut + "; " + spareHit + "; 3.2 s later can be used " + fungo.CanBeUsed(p));
         }
 
+        // The juggle again in an open spot of another room, aimed at a Bullet Kin made tough enough (2000 health) to
+        // take three home runs and stunned (its shots knock her out of the balls' reach): all three hit it, a grand
+        // slam. The Kin is erased after.
+        private IEnumerator FungoGrandSlam(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet)
+        {
+            Act("fungo: grand slam at a Bullet Kin");
+            yield return WarpToOpenCell(p);
+            AIActor prefab = EnemyDatabase.GetOrLoadByGuid("01972dee89fc4404a5c408d50007dad5");
+            AIActor kin = prefab == null || p.CurrentRoom == null ? null
+                : AIActor.Spawn(prefab, p.CenterPosition + new Vector2(4f, 0f), p.CurrentRoom, true, AIActor.AwakenAnimationType.Default, true);
+            if (kin == null)
+            {
+                s.notes.Add("grand slam: no Bullet Kin");
+                yield break;
+            }
+            m_spawned.Add(kin.gameObject);
+            kin.healthHaver.SetHealthMaximum(2000f, null, false);
+            kin.healthHaver.ForceSetCurrentHealth(2000f);
+            yield return Wait(1.5f);
+            // stunned: its shots would knock her about, out of reach of the balls she tossed
+            if (kin.behaviorSpeculator != null)
+            {
+                kin.behaviorSpeculator.Stun(20f, false);
+            }
+            p.forceAimPoint = kin.CenterPosition;
+            yield return FungoJuggle(s, p, fungo, ballType, sweet, kin);
+            p.forceAimPoint = null;
+            s.notes.Add("grand slam: the Kin's health " + (kin ? Fmt(kin.healthHaver.GetCurrentHealth()) : "gone"));
+            if (kin)
+            {
+                kin.EraseFromExistence(true);
+            }
+        }
+
         private IEnumerator FungoDrop(StepResult s, PlayerController p, PlayerItem fungo)
         {
             Act("fungo: let balls drop");
@@ -449,7 +498,8 @@ namespace EtgModSmoke
             {
                 m_spawned.Add(enemy.gameObject);
             }
-            yield return Wait(1.5f);
+            // past its spawn-in (invulnerable while it plays)
+            yield return Wait(2.5f);
             for (int balls = 1; balls <= 2; balls++)
             {
                 yield return WaitForBalls(fungo, balls);
@@ -475,11 +525,14 @@ namespace EtgModSmoke
                 }
                 float damage = -1f;
                 Projectile bullet = null;
+                s.notes.Add("fungo shot setup: player speed " + Fmt(p.specRigidbody.Velocity.magnitude) +
+                            (first ? ", ball speed " + Fmt(((Vector2)InstanceMember(first, "m_velocity")).magnitude) : ", no ball"));
                 if (first)
                 {
-                    // from just left of the ball, flying right through it (no wall in the way)
+                    // from just left of the ball, flying right through it (no wall in the way); close: early in its
+                    // flight the ball rises fast
                     Vector2 target = (Vector2)InstanceMember(first, "Visual");
-                    bullet = SpawnPlayerBullet(p, target - new Vector2(1.2f, 0f), target);
+                    bullet = SpawnPlayerBullet(p, target - new Vector2(0.6f, 0f), target);
                     damage = bullet == null ? -1f : bullet.baseData.damage;
                 }
                 // follow the bullet: how close it came to the enemy, how long it lived

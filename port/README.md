@@ -296,7 +296,9 @@ resources), on Convict's frames; the past and the unlock come later.
   for each next, speed at least 35; it keeps everything it carries. The ball is spent. Her hit balls
   (`FungoHitBall`) and the bat's own shots (`FungoBatShot`) don't count; bullets the bat reflected do. Quick swing: while one of her balls is within reach and within 0.35 s of its
   sweet spot, the bat's charge is x60 (a frame instead of 1 s) and its 1 s reload is cut short
-  (`ForceImmediateReload`), so three balls tossed in a row can be hit by three taps. Timing cue on the ball (the bat
+  (`ForceImmediateReload`), so three balls tossed in a row can be hit by three taps. It also has no lunge
+  (Casey's `MovesPlayerForwardOnChargeFire`, off while quick): juggling, the lunge carried her out of the next ball's
+  reach. Timing cue on the ball (the bat
   has its own charged flash): it warms from white to orange over the 0.3 s before the sweet spot and is gold and 1.5x
   bigger through the home run window. Home runs shake the screen; home runs and fouls say so in a speech bubble; every
   swing logs `[Fungo] <hit>, timing <s>` (or why it missed).
@@ -316,7 +318,9 @@ resources), on Convict's frames; the past and the unlock come later.
   The game destroys only an icon's `dfSprite` on a hit, so the postfix destroys overlays whose icon is gone. If the
   icon can't be added, those icons are tinted light blue instead. Permanent armor, restoring
   armor up to 2 not counting temporary armor: a triple play (a home run that touches 3 enemies) and a grand slam
-  (3 home runs in a row, each within 1.2 s of the one before, no other hit or strike between). Anything over a cap is
+  (3 home runs in a row that hit enemies, counted when each ball hits - `Fungo.HomeRunLanded` from `FungoRicochet` -
+  each within 2 s of the one before; a line drive, a foul, a strikeout or a home run that hits nothing breaks it:
+  juggling in an empty room before a boss gives nothing). Anything over a cap is
   a ball back in Fungo's bag. A heart picked up at full health stays the game's (it goes to the health vending
   machine).
 
@@ -415,9 +419,10 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    three balls tossed in a row and hit by taps, three fouls in a row (strikeout: bag shut, the ball in the air
    unhittable, open again 3 s later), a ball and then a chain of two shot with a bullet at a Bullet Kin next to her
    in an open spot of another room (multiplier, links, its health; in the start room the elevator's colliders right
-   above her stop the bullet), the Elbow Guard's armor after each (grand slam, kills, three reflected bullets, a
-   triple play at three Bullet Kins, strikeout and room clear burning temporary armor), three balls let drop and picked up, and a Geta dodge roll (reload finished,
-   a swing right out of it). Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
+   above her stop the bullet), the Elbow Guard's armor after each (no grand slam for the juggle in the empty start
+   room, a grand slam juggling at a Bullet Kin with 2000 health, kills, three reflected bullets, a triple play at
+   three Bullet Kins, strikeout and room clear burning temporary armor), three balls let drop and picked up, and a
+   Geta dodge roll (reload finished, a swing right out of it). Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
    and idle phases (clips present; each hold played and screenshot).
 
 Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting

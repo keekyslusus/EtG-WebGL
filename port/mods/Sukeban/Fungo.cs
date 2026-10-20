@@ -18,6 +18,8 @@ namespace Sukeban
         // While a ball is in reach and in its swing window the bat swings at once: its 1 s charge takes a frame and
         // its 1 s reload is skipped, so three balls tossed in a row can be hit one after another.
         public const float QuickSwingCharge = 60f;
+        // Casey's charged swing lunges her forward (Gun.MovesPlayerForwardOnChargeFire): juggling, that carried her
+        // away from the next ball. The quick swing is a batting-practice stance, no lunge.
 
         // Against tossing and swinging sloppily: a foul is a strike and switches the quick swing off for a moment;
         // three strikes are a strikeout (her past: she struck out in the bottom of the ninth at Koshien) - the bag is
@@ -27,10 +29,11 @@ namespace Sukeban
         public const float StrikeMemory = 4f;
         public const float StrikeoutSeconds = 3f;
 
-        // A grand slam (the Elbow Guard's permanent armor): GrandSlamHomeRuns home runs in a row, each within
-        // GrandSlamGap s of the one before (juggling), no other hit or strike between.
+        // A grand slam (the Elbow Guard's permanent armor): GrandSlamHomeRuns home runs in a row that hit enemies,
+        // each hitting within GrandSlamGap s of the one before (juggling), no other hit, strike or home run that hit
+        // nothing between. Counted when the ball hits, not at the swing: juggling in an empty room gives nothing.
         public const int GrandSlamHomeRuns = 3;
-        public const float GrandSlamGap = 1.2f;
+        public const float GrandSlamGap = 2f;
 
         // the swings that hit balls: hers, and Casey in both forms
         public static bool IsBat(Gun gun)
@@ -49,6 +52,7 @@ namespace Sukeban
         private Gun m_hookedGun;
         private int m_swingFrame = -1;
         private StatModifier m_quickCharge;
+        private bool m_gunLunges;
         private int m_strikes;
         private float m_strikeMemory;
         private float m_lockout;
@@ -174,6 +178,10 @@ namespace Sukeban
             }
             bool quick = m_hookedGun && m_lockout <= 0f && m_strikeout <= 0f && FungoBall.AnyHittable(m_owner);
             SetQuickCharge(m_owner, quick);
+            if (m_hookedGun)
+            {
+                m_hookedGun.MovesPlayerForwardOnChargeFire = m_gunLunges && !quick;
+            }
             if (quick && m_hookedGun.IsReloading)
             {
                 m_hookedGun.ForceImmediateReload();
@@ -219,23 +227,47 @@ namespace Sukeban
                     Strike();
                     break;
             }
-            if (hit == FungoBall.Hit.None)
-            {
-                return;
-            }
-            if (hit != FungoBall.Hit.HomeRun || Time.time - m_lastHomeRun > GrandSlamGap)
+            // a line drive or a foul breaks a grand slam; home runs count when they hit (HomeRunLanded)
+            if (hit == FungoBall.Hit.LineDrive || hit == FungoBall.Hit.Foul)
             {
                 m_homeRuns = 0;
             }
-            if (hit == FungoBall.Hit.HomeRun)
+        }
+
+        /// <summary>One of her home runs hit an enemy (its first), or went without hitting any.</summary>
+        public static void HomeRunLanded(PlayerController player, bool hitEnemy)
+        {
+            if (!player)
             {
-                m_homeRuns++;
-                m_lastHomeRun = Time.time;
-                if (m_homeRuns >= GrandSlamHomeRuns)
+                return;
+            }
+            foreach (PlayerItem active in player.activeItems)
+            {
+                if (active is Fungo fungo)
                 {
-                    m_homeRuns = 0;
-                    ArmoredElbowGuard.AwardPermanent(m_owner, "grand slam", "Grand slam!", "Гранд-слэм!");
+                    fungo.CountHomeRun(hitEnemy);
                 }
+            }
+        }
+
+        private void CountHomeRun(bool hitEnemy)
+        {
+            Debug.Log("[Fungo] home run " + (hitEnemy ? "hit an enemy" : "hit nothing") + ", streak was " + m_homeRuns +
+                      ", " + (Time.time - m_lastHomeRun).ToString("0.00") + " s since the last");
+            if (!hitEnemy || Time.time - m_lastHomeRun > GrandSlamGap)
+            {
+                m_homeRuns = 0;
+            }
+            if (!hitEnemy || !m_owner)
+            {
+                return;
+            }
+            m_homeRuns++;
+            m_lastHomeRun = Time.time;
+            if (m_homeRuns >= GrandSlamHomeRuns)
+            {
+                m_homeRuns = 0;
+                ArmoredElbowGuard.AwardPermanent(m_owner, "grand slam", "Grand slam!", "Гранд-слэм!");
             }
         }
 
@@ -296,11 +328,13 @@ namespace Sukeban
             if (m_hookedGun)
             {
                 m_hookedGun.PostProcessProjectile -= OnBatShot;
+                m_hookedGun.MovesPlayerForwardOnChargeFire = m_gunLunges;
             }
             m_hookedGun = gun;
             if (gun)
             {
                 gun.PostProcessProjectile += OnBatShot;
+                m_gunLunges = gun.MovesPlayerForwardOnChargeFire;
             }
         }
 

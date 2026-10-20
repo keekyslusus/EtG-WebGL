@@ -16,8 +16,8 @@ namespace Sukeban
     /// armor the guard counts as temporary: lost first, gone when the room is cleared, on a new floor and on a
     /// strikeout. The HUD lays the guard's own icon over those armor icons (<see cref="HudPatch"/>).</item>
     /// <item>Permanent armor for hard ones, restoring armor up to <see cref="PermanentCap"/> (found armor counts
-    /// on top): a triple play (a home run that touches three enemies) and a grand slam (three home runs in a row,
-    /// juggling, no other hit or strike between).</item>
+    /// on top): a triple play (a home run that touches three enemies) and a grand slam (three home runs in a row
+    /// that hit enemies, juggling, no other hit or strike between).</item>
     /// <item>Whatever goes over a cap is a ball back in Fungo's bag.</item>
     /// </list>
     /// </summary>
