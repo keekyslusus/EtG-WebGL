@@ -5,8 +5,9 @@ namespace Sukeban
 {
     /// <summary>
     /// Passive item: geta, wooden sandals. During a dodge roll and for <see cref="WindowAfterRoll"/> s after it,
-    /// charged weapons charge almost at once (the bat's 1 s wind-up becomes a few frames): she swings out of the roll.
-    /// Rolling over a dropped <see cref="FungoBall"/> picks it up from further away.
+    /// charged weapons charge almost at once (the bat's 1 s wind-up becomes a few frames) and reloads finish at once:
+    /// she swings out of the roll, also while Fungo is struck out. Rolling over a dropped <see cref="FungoBall"/>
+    /// picks it up from further away.
     /// </summary>
     public class Geta : PassiveItem
     {
@@ -29,12 +30,12 @@ namespace Sukeban
             Text.Set(item,
                 name, "Out of the Roll",
                 "Wooden sandals, loud on every floor of the school. Nobody has ever heard her coming anyway.\n\n" +
-                "Charged weapons charge instantly during a dodge roll and right after it. Rolling picks up dropped balls " +
-                "from further away.",
+                "Charged weapons charge instantly during a dodge roll and right after it, and a roll finishes reloading. " +
+                "Rolling picks up dropped balls from further away.",
                 "Гэта", "Удар с переката",
                 "Деревянные сандалии, гремят на каждом этаже школы. Всё равно никто ни разу не слышал, как она подходит.\n\n" +
-                "Во время переката и сразу после него заряжаемое оружие заряжается мгновенно. Перекатом упавшие мячи " +
-                "подбираются издалека.");
+                "Во время переката и сразу после него заряжаемое оружие заряжается мгновенно, а перекат завершает " +
+                "перезарядку. Перекатом упавшие мячи подбираются издалека.");
             item.quality = ItemQuality.SPECIAL;
             item.CanBeDropped = false;
             item.PreventStartingOwnerFromDropping = true;
@@ -87,6 +88,11 @@ namespace Sukeban
             else if (m_window > 0f)
             {
                 m_window -= BraveTime.DeltaTime;
+            }
+            // a reload that starts during the roll (the bat starts its own a moment after the swing) ends at once too
+            if (m_window > 0f && m_owner.CurrentGun && m_owner.CurrentGun.IsReloading)
+            {
+                m_owner.CurrentGun.ForceImmediateReload();
             }
             SetCharge(m_owner, m_window > 0f);
         }

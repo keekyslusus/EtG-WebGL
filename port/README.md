@@ -309,15 +309,20 @@ resources), on Convict's frames; the past and the unlock come later.
   within 35 degrees and homes a little; carries on to the 2 nearest enemies not hit yet: `FungoRicochet` + pierce),
   within 0.18 s a line drive (30, at the aim), within 0.35 s a foul (15, 30-60 degrees off the aim). The hit ball is
   38 Special's bullet with the ball sprite, and goes through `DoPostProcessProjectile` (her items apply).
-  `numberOfUses` is the balls in the bag (3, one back every 2.5 s; the cooldown bar shows the wait when it is empty);
-  walking over a lying ball puts it back. Quick swing: while one of her balls is within reach and within 0.35 s of its
+  `numberOfUses` is the balls in the bag (3, one back every 4 s; the cooldown bar shows the wait when it is empty);
+  a home run or a line drive puts the ball straight back in the bag, a foul doesn't; walking over a lying ball puts
+  it back. Against tossing and swinging sloppily: a foul is a strike (speech bubble "Strike N!") and switches the
+  quick swing off for 0.75 s; three strikes with no clean hit between and none older than 4 s are a strikeout
+  ("Strikeout!", her past): the bag is shut for 3 s (shown on the cooldown bar) and the balls in the air turn grey
+  and drop unhittable. Quick swing: while one of her balls is within reach and within 0.35 s of its
   sweet spot, the bat's charge is x60 (a frame instead of 1 s) and its 1 s reload is cut short
   (`ForceImmediateReload`), so three balls tossed in a row can be hit by three taps. Timing cue on the ball (the bat
   has its own charged flash): it warms from white to orange over the 0.3 s before the sweet spot and is gold and 1.5x
   bigger through the home run window. Home runs shake the screen; home runs and fouls say so in a speech bubble; every
   swing logs `[Fungo] <hit>, timing <s>` (or why it missed).
-- **Geta** (`skb:geta`, passive): `ChargeAmountMultiplier` x25 during a dodge roll and 0.4 s after (the bat's 1 s
-  charge becomes a few frames: swing out of the roll); rolling picks a lying ball up from twice as far.
+- **Geta** (`skb:geta`, passive): during a dodge roll and 0.4 s after, reloads finish at once
+  (`ForceImmediateReload`; the bat starts its reload a moment after the swing) and `ChargeAmountMultiplier` is x25 (the bat's 1 s charge becomes a few
+  frames: swing out of the roll, also while Fungo is struck out); rolling picks a lying ball up from twice as far.
 - **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup; a Harmony postfix on
   `PassiveReflectItem.ReflectBulletsInRange` (all reflections, the bat's included) gives +1.5 speed for 3 s.
 - **Portrait** (`Character/facecard.png`, 34 x 34 like the game's dialogue portraits): drawn by
@@ -422,8 +427,9 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    noted, its actives used and its gun swung charged at an enemy bullet put in front of it, with the player stats each
    changed; its actives are used again in five rooms with a screenshot each (`<character>-room<N>.png`). The Sukeban
    also gets `SmokeSukeban.cs`: Fungo swings at several timings from the sweet spot (hit kind, timing, hit balls),
-   three balls tossed in a row and hit by taps, three balls let drop and picked up, and a swing right out of a Geta
-   dodge roll. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
+   three balls tossed in a row and hit by taps, three fouls in a row (strikeout: bag shut, the ball in the air
+   unhittable, open again 3 s later), three balls let drop and picked up, and a Geta dodge roll (reload finished,
+   a swing right out of it). Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
    and idle phases (clips present; each hold played and screenshot).
 
 Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting

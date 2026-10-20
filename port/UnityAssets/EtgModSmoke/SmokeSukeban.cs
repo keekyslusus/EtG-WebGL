@@ -6,8 +6,8 @@ using System.Reflection;
 using UnityEngine;
 
 // Phase "characters", the Sukeban's own mechanics (port/mods/Sukeban): Fungo's toss and the bat swing that hits the
-// ball, at several timings from the sweet spot; a ball let drop and picked up again; the empty bag; the Geta's
-// instant charge out of a dodge roll. Through the player's own input like the charged attack; the mod only through
+// ball, at several timings from the sweet spot; three balls juggled by taps; three fouls in a row (a strikeout);
+// balls let drop and picked up again, the empty bag; the Geta's roll (reload finished, instant charge). Through the player's own input like the charged attack; the mod only through
 // reflection.
 namespace EtgModSmoke
 {
@@ -40,6 +40,7 @@ namespace EtgModSmoke
                     yield return FungoSwing(s, p, fungo, ballType, sweet + off, off);
                 }
                 yield return FungoJuggle(s, p, fungo, ballType, sweet);
+                yield return FungoStrikeout(s, p, fungo, ballType, sweet);
                 yield return FungoDrop(s, p, fungo);
             }
             if (p != null && FindType(SukebanAssembly, "Sukeban.Geta") != null)
@@ -73,10 +74,7 @@ namespace EtgModSmoke
                 yield return null;
             }
             yield return Wait(0.2f);
-            if (Balls(fungo) == 0)
-            {
-                yield return Wait(3f);
-            }
+            yield return WaitForBalls(fungo, 1);
 
             // wind the bat up first (its swing needs a 1 s charge), toss, release at the target
             int shots = 0;
@@ -194,10 +192,100 @@ namespace EtgModSmoke
             yield return Wait(1.5f);
         }
 
+        private static IEnumerator WaitForBalls(PlayerItem fungo, int n)
+        {
+            float end = Now + 13f;
+            while (Now < end && (Balls(fungo) < n || fungo.IsOnCooldown))
+            {
+                yield return null;
+            }
+        }
+
+        // Tap at a ball's time from the toss (the quick swing: fire down for three frames).
+        private IEnumerator TapAt(PlayerController p, UnityEngine.Object ball, float t)
+        {
+            float end = Now + 3f;
+            while (ball && Now < end && (float)InstanceMember(ball, "m_t") + 2f * Time.deltaTime < t)
+            {
+                yield return null;
+            }
+            p.forceFireDown = true;
+            yield return null;
+            p.forceFireDown = false;
+            p.forceFire = true;
+            yield return null;
+            yield return null;
+            p.forceFire = false;
+            p.forceFireUp = true;
+            yield return null;
+            p.forceFireUp = false;
+            yield return Frames(2);
+        }
+
+        private UnityEngine.Object TossBall(PlayerController p, PlayerItem fungo, Type ballType, List<UnityEngine.Object> known)
+        {
+            UseActive(p, fungo);
+            UnityEngine.Object newest = null;
+            foreach (UnityEngine.Object b in UnityEngine.Object.FindObjectsOfType(ballType))
+            {
+                if (!known.Contains(b))
+                {
+                    known.Add(b);
+                    newest = b;
+                }
+            }
+            return newest;
+        }
+
+        // Three fouls in a row: strikes 1, 2, then a strikeout - the bag shuts for a while and a second ball already in
+        // the air can't be hit any more.
+        private IEnumerator FungoStrikeout(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet)
+        {
+            Act("fungo: three fouls, a strikeout");
+            FieldInfo lastHit = ballType.GetField("LastHit", BindingFlags.Static | BindingFlags.Public);
+            // strikes older than the strike memory (4 s) are forgotten
+            yield return Wait(4.5f);
+            List<UnityEngine.Object> known = new List<UnityEngine.Object>();
+            List<string> taps = new List<string>();
+            UnityEngine.Object spare = null;
+            for (int i = 0; i < 3; i++)
+            {
+                yield return WaitForBalls(fungo, i == 2 ? 2 : 1);
+                // the quick swing is off for 0.75 s after a strike
+                yield return Wait(0.9f);
+                lastHit.SetValue(null, Enum.ToObject(lastHit.FieldType, 0));
+                UnityEngine.Object ball = TossBall(p, fungo, ballType, known);
+                yield return null;
+                if (i == 2)
+                {
+                    // a second ball, tossed just before the third foul: far from its own window then, so the swing
+                    // takes the first one (one ball per swing, the best-timed)
+                    float end = Now + 3f;
+                    while (ball && Now < end && (float)InstanceMember(ball, "m_t") < sweet + 0.2f)
+                    {
+                        yield return null;
+                    }
+                    spare = TossBall(p, fungo, ballType, known);
+                }
+                yield return TapAt(p, ball, sweet + 0.27f);
+                taps.Add(lastHit.GetValue(null) + " (strikes " + InstanceMember(fungo, "m_strikes") + ")");
+            }
+            string shut = "can be used " + fungo.CanBeUsed(p) + ", cooldown " + fungo.CurrentTimeCooldown.ToString("0.00", CultureInfo.InvariantCulture) + " s";
+            lastHit.SetValue(null, Enum.ToObject(lastHit.FieldType, 0));
+            string spareHit = "no second ball";
+            if (spare)
+            {
+                yield return TapAt(p, spare, sweet);
+                spareHit = "the ball in the air after it: " + lastHit.GetValue(null);
+            }
+            yield return Wait(3.2f);
+            s.notes.Add("fungo strikeout: " + Join(taps) + "; then " + shut + "; " + spareHit + "; 3.2 s later can be used " + fungo.CanBeUsed(p));
+        }
+
         private IEnumerator FungoDrop(StepResult s, PlayerController p, PlayerItem fungo)
         {
             Act("fungo: let balls drop");
-            yield return Wait(3f);
+            yield return WaitForBalls(fungo, 3);
             int before = Balls(fungo);
             for (int i = 0; i < 3 && fungo.CanBeUsed(p) && !fungo.IsOnCooldown; i++)
             {
@@ -213,10 +301,29 @@ namespace EtgModSmoke
 
         private IEnumerator GetaRoll(StepResult s, PlayerController p)
         {
-            Act("geta: dodge roll, swing out of it");
+            Act("geta: charged swing, dodge roll, swing out of it");
             yield return Wait(0.5f);
+            // a charged swing first, so the bat is reloading when the roll starts
+            p.forceFireDown = true;
+            yield return null;
+            p.forceFireDown = false;
+            p.forceFire = true;
+            yield return Wait(CharacterChargeSeconds);
+            p.forceFire = false;
+            p.forceFireUp = true;
+            yield return null;
+            p.forceFireUp = false;
+            // the bat starts its reload a moment after the swing
+            float reloadWait = Now + 1f;
+            while (p.CurrentGun != null && !p.CurrentGun.IsReloading && Now < reloadWait)
+            {
+                yield return null;
+            }
+            bool reloadingBefore = p.CurrentGun != null && p.CurrentGun.IsReloading;
             float idle = p.stats.GetStatValue(PlayerStats.StatType.ChargeAmountMultiplier);
             bool rolled = p.ForceStartDodgeRoll(Vector2.right);
+            yield return Frames(2);
+            bool reloadingInRoll = p.CurrentGun != null && p.CurrentGun.IsReloading;
             float during = 0f;
             float end = Now + 2f;
             while (p.IsDodgeRolling && Now < end)
@@ -239,7 +346,8 @@ namespace EtgModSmoke
             yield return Wait(0.6f);
             p.PostProcessProjectile -= countShots;
             float after = p.stats.GetStatValue(PlayerStats.StatType.ChargeAmountMultiplier);
-            s.notes.Add("geta: roll started " + rolled + ", charge multiplier " + Fmt(idle) + " -> " + Fmt(during) + " in the roll -> " +
+            s.notes.Add("geta: bat reloading before the roll " + reloadingBefore + ", in the roll " + reloadingInRoll +
+                        "; roll started " + rolled + ", charge multiplier " + Fmt(idle) + " -> " + Fmt(during) + " in the roll -> " +
                         Fmt(after) + " after; a 0.15 s charge right out of the roll fired " + shots + " player projectiles");
         }
 

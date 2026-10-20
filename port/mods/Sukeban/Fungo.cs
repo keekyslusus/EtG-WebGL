@@ -6,16 +6,26 @@ namespace Sukeban
     /// <summary>
     /// Active item: fungo, a coach's batting practice - toss a ball up for yourself and hit it. Tosses a ball
     /// (<see cref="FungoBall"/>); a bat swing as it comes back down sends it off, the harder the better the timing.
-    /// Holds <see cref="MaxBalls"/> balls that come back one every <see cref="RegenSeconds"/>; a ball that drops
-    /// unhit can be picked up again. While a ball can be hit, the bat swings at once (no charge, no reload).
+    /// Holds <see cref="MaxBalls"/> balls that come back one every <see cref="RegenSeconds"/>; a home run or a line
+    /// drive puts the ball straight back in the bag, a ball that drops unhit can be picked up again. While a ball can
+    /// be hit, the bat swings at once (no charge, no reload). A foul is a strike; three strikes in a row (no clean hit
+    /// between, none older than <see cref="StrikeMemory"/>) are a strikeout: the bag is shut for a while.
     /// </summary>
     public class Fungo : PlayerItem
     {
         public const int MaxBalls = 3;
-        public const float RegenSeconds = 2.5f;
+        public const float RegenSeconds = 4f;
         // While a ball is in reach and in its swing window the bat swings at once: its 1 s charge takes a frame and
         // its 1 s reload is skipped, so three balls tossed in a row can be hit one after another.
         public const float QuickSwingCharge = 60f;
+
+        // Against tossing and swinging sloppily: a foul is a strike and switches the quick swing off for a moment;
+        // three strikes are a strikeout (her past: she struck out in the bottom of the ninth at Koshien) - the bag is
+        // shut and the balls in the air drop. The Geta's roll still gets the bat swinging meanwhile.
+        public const int StrikesToOut = 3;
+        public const float StrikeLockout = 0.75f;
+        public const float StrikeMemory = 4f;
+        public const float StrikeoutSeconds = 3f;
 
         // the swings that hit balls: hers, and Casey in both forms
         public static bool IsBat(Gun gun)
@@ -34,6 +44,10 @@ namespace Sukeban
         private Gun m_hookedGun;
         private int m_swingFrame = -1;
         private StatModifier m_quickCharge;
+        private int m_strikes;
+        private float m_strikeMemory;
+        private float m_lockout;
+        private float m_strikeout;
 
         public static void Init()
         {
@@ -46,11 +60,13 @@ namespace Sukeban
                 name, "Batting Practice",
                 "A bag of scuffed practice balls. She hits them alone after everyone else has gone home.\n\n" +
                 "Tosses a ball up. Swing a bat as it comes down: the better the timing, the harder the hit. " +
-                "While a ball is within reach the bat swings at once. Holds three balls; dropped balls can be picked up again.",
+                "While a ball is within reach the bat swings at once. Clean hits put the ball back in the bag; " +
+                "fouls are strikes, and three strikes shut the bag for a while. Dropped balls can be picked up again.",
                 "Фунго", "Тренировка отбивания",
                 "Мешок потёртых тренировочных мячей. Она отбивает их одна, когда все уже ушли домой.\n\n" +
                 "Подбрасывает мяч. Взмахни битой, когда он падает: чем точнее момент, тем сильнее удар. " +
-                "Пока мяч рядом, бита бьёт без замаха. Вмещает три мяча; упавший мяч можно подобрать.");
+                "Пока мяч рядом, бита бьёт без замаха. Чистый удар возвращает мяч в мешок; фол - это страйк, " +
+                "после трёх страйков мешок ненадолго закрывается. Упавший мяч можно подобрать.");
             item.SetCooldownType(ItemBuilder.CooldownType.Timed, RegenSeconds);
             // numberOfUses is the balls in hand; PlayerItem shows the count while there is more than one
             item.numberOfUses = MaxBalls;
@@ -89,7 +105,7 @@ namespace Sukeban
 
         public override bool CanBeUsed(PlayerController user)
         {
-            return numberOfUses > 0 && base.CanBeUsed(user);
+            return numberOfUses > 0 && m_strikeout <= 0f && base.CanBeUsed(user);
         }
 
         protected override void DoEffect(PlayerController user)
@@ -136,7 +152,17 @@ namespace Sukeban
                 return;
             }
             HookGun(IsBat(m_owner.CurrentGun) ? m_owner.CurrentGun : null);
-            bool quick = m_hookedGun && FungoBall.AnyHittable(m_owner);
+            float dt = BraveTime.DeltaTime;
+            m_lockout = Mathf.Max(0f, m_lockout - dt);
+            if (m_strikeMemory > 0f)
+            {
+                m_strikeMemory -= dt;
+                if (m_strikeMemory <= 0f)
+                {
+                    m_strikes = 0;
+                }
+            }
+            bool quick = m_hookedGun && m_lockout <= 0f && m_strikeout <= 0f && FungoBall.AnyHittable(m_owner);
             SetQuickCharge(m_owner, quick);
             if (quick && m_hookedGun.IsReloading)
             {
@@ -145,7 +171,7 @@ namespace Sukeban
 
             if (numberOfUses < MaxBalls)
             {
-                m_regen += BraveTime.DeltaTime;
+                m_regen += dt;
                 if (m_regen >= RegenSeconds)
                 {
                     m_regen -= RegenSeconds;
@@ -156,10 +182,51 @@ namespace Sukeban
             {
                 m_regen = 0f;
             }
-            if (numberOfUses == 0)
+            if (m_strikeout > 0f)
+            {
+                // the cooldown bar shows the bag shut
+                m_strikeout -= dt;
+                CurrentTimeCooldown = m_strikeout > 0f ? m_strikeout : 0f;
+            }
+            else if (numberOfUses == 0)
             {
                 CurrentTimeCooldown = Mathf.Max(0.01f, RegenSeconds - m_regen);
             }
+        }
+
+        private void OnHit(FungoBall.Hit hit)
+        {
+            switch (hit)
+            {
+                case FungoBall.Hit.HomeRun:
+                case FungoBall.Hit.LineDrive:
+                    // a clean hit: the ball comes back, the count is cleared
+                    AddBall();
+                    m_strikes = 0;
+                    m_strikeMemory = 0f;
+                    break;
+                case FungoBall.Hit.Foul:
+                    Strike();
+                    break;
+            }
+        }
+
+        private void Strike()
+        {
+            m_strikes++;
+            m_strikeMemory = StrikeMemory;
+            m_lockout = StrikeLockout;
+            if (m_strikes < StrikesToOut)
+            {
+                FungoBall.Say(m_owner, "Strike " + m_strikes + "!", "Страйк " + m_strikes + "!");
+                return;
+            }
+            m_strikes = 0;
+            m_strikeMemory = 0f;
+            m_strikeout = StrikeoutSeconds;
+            FungoBall.StrikeOut(m_owner);
+            FungoBall.Say(m_owner, "Strikeout!", "Страйкаут!");
+            AkSoundEngine.PostEvent("Play_OBJ_purchase_unable_01", gameObject);
         }
 
         private void SetQuickCharge(PlayerController player, bool on)
@@ -214,7 +281,7 @@ namespace Sukeban
                 return;
             }
             m_swingFrame = Time.frameCount;
-            FungoBall.Swing(m_owner, m_hookedGun.CurrentAngle);
+            OnHit(FungoBall.Swing(m_owner, m_hookedGun.CurrentAngle));
         }
 
         protected override void OnPreDrop(PlayerController user)

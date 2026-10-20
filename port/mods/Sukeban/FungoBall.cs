@@ -42,6 +42,7 @@ namespace Sukeban
         private static readonly Color CueWarm = new Color(1f, 0.55f, 0.25f);
         private static readonly Color CueGold = new Color(1f, 0.85f, 0.15f);
         public const float CuePop = 1.5f;
+        private static readonly Color StruckOut = new Color(0.55f, 0.55f, 0.6f);
 
         public const float LieSeconds = 8f;
         public const float PickupRadius = 0.8f;
@@ -64,6 +65,8 @@ namespace Sukeban
         private float m_t;
         private bool m_bounced;
         private bool m_lying;
+        // struck out: drops without being hittable
+        private bool m_dead;
         private float m_lieRemaining;
         private tk2dBaseSprite m_sprite;
         private tk2dBaseSprite m_shadow;
@@ -96,14 +99,17 @@ namespace Sukeban
             Tossed++;
         }
 
-        /// <summary>A bat swing by <paramref name="owner"/> aimed at <paramref name="angle"/>: hits her best-timed ball in reach.</summary>
-        public static void Swing(PlayerController owner, float angle)
+        /// <summary>
+        /// A bat swing by <paramref name="owner"/> aimed at <paramref name="angle"/>: hits her best-timed ball in reach.
+        /// Returns the hit, None if no ball was hit.
+        /// </summary>
+        public static Hit Swing(PlayerController owner, float angle)
         {
             // one ball per swing: the best-timed one in reach (the others wait for their own swing when juggling)
             FungoBall best = null;
             foreach (FungoBall ball in s_live)
             {
-                if (!ball || ball.m_owner != owner || ball.m_lying)
+                if (!ball || ball.m_owner != owner || ball.m_lying || ball.m_dead)
                 {
                     continue;
                 }
@@ -117,9 +123,18 @@ namespace Sukeban
                     best = ball;
                 }
             }
-            if (best != null)
+            return best != null ? best.TryHit(angle) : Hit.None;
+        }
+
+        /// <summary>A strikeout: <paramref name="owner"/>'s balls in the air can't be hit any more and just drop.</summary>
+        public static void StrikeOut(PlayerController owner)
+        {
+            foreach (FungoBall ball in s_live)
             {
-                best.TryHit(angle);
+                if (ball && ball.m_owner == owner && !ball.m_lying)
+                {
+                    ball.m_dead = true;
+                }
             }
         }
 
@@ -128,7 +143,7 @@ namespace Sukeban
         {
             foreach (FungoBall ball in s_live)
             {
-                if (ball && ball.m_owner == owner && !ball.m_lying && Mathf.Abs(ball.m_t - SweetSpot) <= FoulWindow &&
+                if (ball && ball.m_owner == owner && !ball.m_lying && !ball.m_dead && Mathf.Abs(ball.m_t - SweetSpot) <= FoulWindow &&
                     Vector2.Distance(ball.m_ground, owner.specRigidbody.UnitBottomCenter) <= Reach)
                 {
                     return true;
@@ -137,7 +152,7 @@ namespace Sukeban
             return false;
         }
 
-        private void TryHit(float angle)
+        private Hit TryHit(float angle)
         {
             float timing = m_t - SweetSpot;
             float off = Mathf.Abs(timing);
@@ -145,7 +160,7 @@ namespace Sukeban
             if (hit == Hit.None)
             {
                 Debug.Log("[Fungo] swing missed: timing " + timing.ToString("+0.000;-0.000") + " s");
-                return;
+                return hit;
             }
             LastHit = hit;
             LastTiming = timing;
@@ -157,7 +172,7 @@ namespace Sukeban
                 case Hit.HomeRun:
                     Launch(from, AimAssist(from, angle), HomeRunDamage, 40f, 2, true);
                     GameManager.Instance.MainCameraController.DoScreenShake(0.6f, 8f, 0.12f, 0.1f, null);
-                    Say("Home run!", "Хоумран!");
+                    Say(m_owner, "Home run!", "Хоумран!");
                     AkSoundEngine.PostEvent("Play_WPN_duelingpistol_impact_01", gameObject);
                     AkSoundEngine.PostEvent("Play_OBJ_power_up_01", gameObject);
                     break;
@@ -169,11 +184,11 @@ namespace Sukeban
                     // a foul: off the end of the bat, 30-60 degrees off the aim
                     float side = Random.value < 0.5f ? -1f : 1f;
                     Launch(from, angle + side * Random.Range(30f, 60f), 15f, 22f, 0);
-                    Say("Foul!", "Фол!");
                     AkSoundEngine.PostEvent("Play_PET_junk_punch_01", gameObject);
                     break;
             }
             Destroy(gameObject);
+            return hit;
         }
 
         // The aim, or the direction to the enemy nearest it within AimAssistCone degrees.
@@ -236,12 +251,13 @@ namespace Sukeban
             m_owner.DoPostProcessProjectile(p);
         }
 
-        private void Say(string en, string ru)
+        /// <summary>A short speech bubble over <paramref name="owner"/> in the game's language (English or Russian).</summary>
+        public static void Say(PlayerController owner, string en, string ru)
         {
             string text = GameManager.Options.CurrentLanguage == StringTableManager.GungeonSupportedLanguages.RUSSIAN ? ru : en;
-            Transform t = m_owner.transform;
+            Transform t = owner.transform;
             TextBoxManager.ClearTextBoxImmediate(t);
-            TextBoxManager.ShowTextBox(m_owner.sprite.WorldTopCenter + new Vector2(0f, 0.5f), t, 0.8f, text);
+            TextBoxManager.ShowTextBox(owner.sprite.WorldTopCenter + new Vector2(0f, 0.5f), t, 0.8f, text);
         }
 
         private static bool Blocked(Vector2 at)
@@ -328,8 +344,12 @@ namespace Sukeban
         private void Place()
         {
             float off = m_t - SweetSpot;
-            bool pop = !m_lying && Mathf.Abs(off) <= PerfectWindow;
-            if (pop)
+            bool pop = !m_lying && !m_dead && Mathf.Abs(off) <= PerfectWindow;
+            if (m_dead)
+            {
+                m_sprite.color = StruckOut;
+            }
+            else if (pop)
             {
                 m_sprite.color = CueGold;
             }
