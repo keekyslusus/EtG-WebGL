@@ -96,25 +96,45 @@ namespace Sukeban
             Tossed++;
         }
 
-        /// <summary>A bat swing by <paramref name="owner"/> aimed at <paramref name="angle"/>: hits her balls in reach.</summary>
+        /// <summary>A bat swing by <paramref name="owner"/> aimed at <paramref name="angle"/>: hits her best-timed ball in reach.</summary>
         public static void Swing(PlayerController owner, float angle)
         {
-            foreach (FungoBall ball in s_live.ToArray())
+            // one ball per swing: the best-timed one in reach (the others wait for their own swing when juggling)
+            FungoBall best = null;
+            foreach (FungoBall ball in s_live)
             {
                 if (!ball || ball.m_owner != owner || ball.m_lying)
                 {
                     continue;
                 }
                 float distance = Vector2.Distance(ball.m_ground, owner.specRigidbody.UnitBottomCenter);
-                if (distance <= Reach)
-                {
-                    ball.TryHit(angle);
-                }
-                else
+                if (distance > Reach)
                 {
                     Debug.Log("[Fungo] swing missed: ball " + distance.ToString("0.00") + " tiles away");
                 }
+                else if (best == null || Mathf.Abs(ball.m_t - SweetSpot) < Mathf.Abs(best.m_t - SweetSpot))
+                {
+                    best = ball;
+                }
             }
+            if (best != null)
+            {
+                best.TryHit(angle);
+            }
+        }
+
+        /// <summary>Whether one of <paramref name="owner"/>'s balls is in reach and in its swing window right now.</summary>
+        public static bool AnyHittable(PlayerController owner)
+        {
+            foreach (FungoBall ball in s_live)
+            {
+                if (ball && ball.m_owner == owner && !ball.m_lying && Mathf.Abs(ball.m_t - SweetSpot) <= FoulWindow &&
+                    Vector2.Distance(ball.m_ground, owner.specRigidbody.UnitBottomCenter) <= Reach)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void TryHit(float angle)

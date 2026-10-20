@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using UnityEngine;
@@ -38,6 +39,7 @@ namespace EtgModSmoke
                 {
                     yield return FungoSwing(s, p, fungo, ballType, sweet + off, off);
                 }
+                yield return FungoJuggle(s, p, fungo, ballType, sweet);
                 yield return FungoDrop(s, p, fungo);
             }
             if (p != null && FindType(SukebanAssembly, "Sukeban.Geta") != null)
@@ -132,6 +134,63 @@ namespace EtgModSmoke
             s.notes.Add(label + ": " + (tossed ? "ball tossed" : "NO BALL") + ", swing fired " + shots + " projectiles, hit " + hit +
                         (hit.ToString() == "None" ? "" : " at " + timing.ToString("+0.000;-0.000", CultureInfo.InvariantCulture) + " s") +
                         ", " + hits + " hit balls flying, " + Balls(fungo) + " balls in the bag");
+            yield return Wait(1.5f);
+        }
+
+        // Three balls tossed 0.3 s apart, each hit by a tap (fire down for three frames) at its sweet spot: the quick
+        // swing (no charge, no reload while a ball is hittable) must hit all three.
+        private IEnumerator FungoJuggle(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet)
+        {
+            Act("fungo: juggle three balls");
+            yield return Wait(3f);
+            FieldInfo lastHit = ballType.GetField("LastHit", BindingFlags.Static | BindingFlags.Public);
+            List<UnityEngine.Object> balls = new List<UnityEngine.Object>();
+            for (int i = 0; i < 3 && fungo.CanBeUsed(p) && !fungo.IsOnCooldown; i++)
+            {
+                UseActive(p, fungo);
+                yield return null;
+                foreach (UnityEngine.Object b in UnityEngine.Object.FindObjectsOfType(ballType))
+                {
+                    if (!balls.Contains(b))
+                    {
+                        balls.Add(b);
+                    }
+                }
+                if (i < 2)
+                {
+                    yield return Wait(0.3f);
+                }
+            }
+            List<string> hits = new List<string>();
+            foreach (UnityEngine.Object ball in balls)
+            {
+                lastHit.SetValue(null, Enum.ToObject(lastHit.FieldType, 0));
+                float end = Now + 3f;
+                while (ball && Now < end && (float)InstanceMember(ball, "m_t") + 2f * Time.deltaTime < sweet)
+                {
+                    yield return null;
+                }
+                if (!ball)
+                {
+                    hits.Add("gone");
+                    continue;
+                }
+                p.forceFireDown = true;
+                yield return null;
+                p.forceFireDown = false;
+                p.forceFire = true;
+                yield return null;
+                yield return null;
+                p.forceFire = false;
+                p.forceFireUp = true;
+                yield return null;
+                p.forceFireUp = false;
+                yield return Frames(2);
+                object hit = lastHit.GetValue(null);
+                float timing = Convert.ToSingle(StaticMember(ballType, "LastTiming"), CultureInfo.InvariantCulture);
+                hits.Add(hit + (hit.ToString() == "None" ? "" : " " + timing.ToString("+0.000;-0.000", CultureInfo.InvariantCulture)));
+            }
+            s.notes.Add("fungo juggle: " + balls.Count + " balls tossed, taps: " + Join(hits));
             yield return Wait(1.5f);
         }
 
