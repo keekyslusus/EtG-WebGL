@@ -207,6 +207,7 @@ namespace EtgModSmoke
                 s.notes.Add("after the charged attack: " + StatChanges(beforeSwing, Stats(p)));
             }
 
+            yield return SukebanTest(s);
             yield return ActivesAcrossRooms(s);
             yield return SwitchAndSettle(s, "pilot");
         }

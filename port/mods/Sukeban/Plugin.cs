@@ -37,8 +37,9 @@ namespace Sukeban
         {
             // Items first: the character's loadout names them.
             NinthInning.Init();
-            KoshienDirt.Init();
+            Fungo.Init();
             ArmoredElbowGuard.Init();
+            Geta.Init();
 
             Character = Loader.BuildCharacter("Sukeban/Character", GUID,
                 foyerPos: new Vector3(30.125f, 29.5f),

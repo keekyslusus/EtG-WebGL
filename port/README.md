@@ -297,11 +297,23 @@ resources), on Convict's frames; the past and the unlock come later.
   layout, the rest transparent); the gun gets copies of `WeaponCollection3` and its animation library whose materials
   use it, so offsets, attach points and animations stay Casey's. The idle frame goes into the Ammonomicon's
   collection as `ninth_inning_idle_001`.
-- **Koshien Dirt** (`skb:koshien_dirt`, active, 450 damage cooldown): pours a home base for 15 s, a flat sprite of
-  3 x 1.5 tiles drawn like a landed supply crate (FG_Critical layer, Background sorting layer; on BG_Critical the floor
-  sometimes covered it). Standing inside its ellipse multiplies `ChargeAmountMultiplier` by 2 (what `Gun` uses for
-  charge time); the base is dimmed otherwise and a sound plays on stepping in. The smoke test's `characters` phase
-  uses it in five rooms and saves screenshots (`port/build/modsmoke/sukeban-room*.png`).
+- **One heart** (`<stats> health: 1` in `characterdata.txt`; Alexandria's `health` field stays 3 but is clamped to
+  the max): Fungo is her strength. The Elbow Guard's armor comes on top.
+- **Fungo** (`skb:fungo`, active; `Fungo.cs`, `FungoBall.cs`): tosses a ball up. It keeps her velocity at the toss
+  (ULTRAKILL's coin), stops at walls, is back at hand height 0.8 s later (`SweetSpot`), bounces once and lies 8 s.
+  "Hand height" is 1.5 tiles, over her head, and the ball is drawn in front of her: lower, her sprite and the bat
+  hid it right in the home run window. A swing of a bat (hers, Casey 541 or 616: the gun's `PostProcessProjectile`, once per frame) with the ball's ground
+  point within 2.25 tiles of her feet hits it by timing: within 0.07 s of the sweet spot a home run (120 damage,
+  more than the bat's own charged hit; speed 40; turns to the enemy nearest the aim within 35 degrees and homes a
+  little; carries on to the 2 nearest enemies not hit yet: `FungoRicochet` + pierce), within 0.18 s a line drive
+  (30, at the aim), within 0.35 s a foul (15, 30-60 degrees off the aim). The hit ball is 38 Special's bullet with
+  the ball sprite, and goes through `DoPostProcessProjectile` (her items apply). `numberOfUses` is the balls in the
+  bag (3, one back every 2.5 s; the cooldown bar shows the wait when it is empty); walking over a lying ball puts it
+  back. Timing cue on the ball (the bat has its own charged flash): it warms from white to orange over the 0.3 s
+  before the sweet spot and is gold and 1.5x bigger through the home run window. Home runs shake the screen; home
+  runs and fouls say so in a speech bubble; every swing logs `[Fungo] <hit>, timing <s>` (or why it missed).
+- **Geta** (`skb:geta`, passive): `ChargeAmountMultiplier` x25 during a dodge roll and 0.4 s after (the bat's 1 s
+  charge becomes a few frames: swing out of the roll); rolling picks a lying ball up from twice as far.
 - **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup; a Harmony postfix on
   `PassiveReflectItem.ReflectBulletsInRange` (all reflections, the bat's included) gives +1.5 speed for 3 s.
 - **Portrait** (`Character/facecard.png`, 34 x 34 like the game's dialogue portraits): drawn by
@@ -404,7 +416,9 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
 5. every mod character (MtG API's `ETGModConsole.Characters` beyond the game's twelve, where Alexandria's CharacterAPI
    registers them) is switched to like the `character` command; its starting guns / items, health and armor are
    noted, its actives used and its gun swung charged at an enemy bullet put in front of it, with the player stats each
-   changed. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
+   changed; its actives are used again in five rooms with a screenshot each (`<character>-room<N>.png`). The Sukeban
+   also gets `SmokeSukeban.cs`: Fungo swings at several timings from the sweet spot (hit kind, timing, hit balls),
+   three balls let drop and picked up, and a swing right out of a Geta dodge roll. Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
    and idle phases (clips present; each hold played and screenshot).
 
 Phase `batching` (not in `all`, `SmokeBatching.cs`): in the first floor's start room, empty and with 12 shooting

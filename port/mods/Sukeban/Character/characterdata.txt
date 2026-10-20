@@ -5,11 +5,17 @@ nickname: Batter
 
 <loadout>
 	skb:ninth_inning infinite
-	skb:koshien_dirt
+	skb:fungo
 	skb:armored_elbow_guard
+	skb:geta
 </loadout>
 
 # Alexandria's HandleLoadout throws without this list, alternate costume or not.
 <altGuns>
 	skb:ninth_inning infinite
 </altGuns>
+
+# One heart - Fungo is her strength (the Elbow Guard's armor comes on top).
+<stats>
+	health: 1
+</stats>

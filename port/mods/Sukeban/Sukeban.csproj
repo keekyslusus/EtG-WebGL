@@ -32,7 +32,7 @@
     <Reference Include="$(Mods)Alexandria-Alexandria\plugins\Alexandria.dll" Private="false" />
   </ItemGroup>
   <ItemGroup>
-    <!-- Alexandria finds them by manifest name: Sukeban.Resources.koshien_dirt.png, Sukeban.Character.characterdata.txt -->
+    <!-- Alexandria finds them by manifest name: Sukeban.Resources.fungo.png, Sukeban.Character.characterdata.txt -->
     <EmbeddedResource Include="Resources\*.png" />
     <EmbeddedResource Include="Character\**\*" />
     <None Remove="tools\**" />

@@ -32,25 +32,11 @@ PALETTE = {
     "O": (150, 96, 54),      # bat wood
     "o": (196, 136, 80),     # bat wood light
     "g": (180, 184, 192),    # nail
+    "C": (208, 46, 54),      # ball stitches
+    "x": (0, 0, 0, 96),      # shadow (translucent)
+    "Y": (90, 60, 36),       # geta wood shade
+    "y": (150, 104, 64),     # geta wood
 }
-
-KOSHIEN_DIRT = """
-......kkkk......
-.....kRkkRk.....
-.....kR..Rk.....
-......kRRk......
-.....kkTTkk.....
-....kBBTTBBk....
-...kBLBBBBBDk...
-..kBLLBBBBBBDk..
-..kBLBBBBBBBDk..
-..kBBBBBBBBBDk..
-..kBBBBBBBBDDk..
-..kdfdBBBBDDDk..
-...kddfdddDDk...
-...kedddeddek...
-....kkkkkkkk....
-"""
 
 ELBOW_GUARD = """
 .....kkkkkk.....
@@ -88,52 +74,57 @@ kNNk............
 .kk.............
 """
 
-# The floor patch Koshien Dirt leaves behind: a heap of stadium dirt with home plate on it, seen from above and
-# squashed like EtG's floor (3 x 1.5 tiles; KoshienDirt.cs uses the same ellipse for the zone).
-HOME_BASE_SIZE = (48, 24)
+# Fungo: the ball she tosses up for herself (also the hit ball's projectile sprite) and its shadow on the floor.
+FUNGO_BALL = """
+.kkkk.
+kWWWCk
+kWWCWk
+kCWWWk
+kwWWwk
+.kkkk.
+"""
 
+FUNGO_SHADOW = """
+.xxxx.
+xxxxxx
+.xxxx.
+"""
 
-def home_base():
-    import random
-    w, h = HOME_BASE_SIZE
-    rnd = random.Random(9)  # same speckles every run
-    rx, ry = w / 2 - 0.5, h / 2 - 0.5
-    cx, cy = (w - 1) / 2, (h - 1) / 2
-    rows = []
-    for y in range(h):
-        row = ""
-        for x in range(w):
-            d = ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2
-            # a ragged edge: dirt thrown, not drawn
-            edge = 1.0 - 0.12 * rnd.random()
-            if d > edge:
-                row += "."
-            elif d > edge - 0.16:
-                row += "k"
-            else:
-                r = rnd.random()
-                row += "e" if r < 0.18 else "f" if r < 0.34 else "d"
-        rows.append(list(row))
-    # home plate: flat side up, point toward the pitcher's mound (down), 12 px wide
-    plate = [
-        "kkkkkkkkkkkk",
-        "kWWWWWWWWWWk",
-        "kWWWWWWWWWWk",
-        "kWWWWWWWWWWk",
-        "kwWWWWWWWWwk",
-        ".kwWWWWWWwk.",
-        "..kwWWWWwk..",
-        "...kwWWwk...",
-        "....kwwk....",
-        ".....kk.....",
-    ]
-    ox, oy = w // 2 - 6, h // 2 - 5
-    for py, line in enumerate(plate):
-        for px, c in enumerate(line):
-            if c != ".":
-                rows[oy + py][ox + px] = c
-    return "\n".join("".join(r) for r in rows)
+FUNGO_ICON = """
+................
+.....kkkkkk.....
+...kkWWWWWWkk...
+..kWCWWWWWWCWk..
+..kWCWWWWWWCWk..
+.kWWWCWWWWCWWWk.
+.kWWWCWWWWCWWWk.
+.kWWWCWWWWCWWWk.
+.kWWWCWWWWCWWWk.
+..kWCWWWWWWCWk..
+..kwCwWWWWwCwk..
+...kkwwwwwwkk...
+.....kkkkkk.....
+................
+"""
 
+# Geta: a wooden sandal seen from the side, red thong.
+GETA_ICON = """
+................
+................
+................
+.......kk.......
+......kCCk......
+.....kC..Ck.....
+....kC....Ck....
+.kkkkkkkkkkkkkk.
+kyyyyyyyyyyyyyyk
+kYYYYYYYYYYYYYYk
+.kkkkkkkkkkkkkk.
+..kyyk....kyyk..
+..kYYk....kYYk..
+..kkkk....kkkk..
+................
+"""
 
 def draw(art, path):
     rows = [r for r in art.strip("\n").split("\n")]
@@ -143,7 +134,7 @@ def draw(art, path):
         for x, c in enumerate(row.ljust(w, ".")):
             color = PALETTE[c]
             if color:
-                img.putpixel((x, y), color + (255,))
+                img.putpixel((x, y), color if len(color) == 4 else color + (255,))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     img.save(path)
     print(f"  {os.path.relpath(path, MOD)} {img.size[0]}x{img.size[1]}")
@@ -152,12 +143,15 @@ def draw(art, path):
 def main():
     res = os.path.join(MOD, "Resources")
     loadout = os.path.join(MOD, "Character", "loadoutsprites")
-    draw(KOSHIEN_DIRT, os.path.join(res, "koshien_dirt.png"))
     draw(ELBOW_GUARD, os.path.join(res, "elbow_guard.png"))
-    draw(home_base(), os.path.join(res, "koshien_base.png"))
+    draw(FUNGO_ICON, os.path.join(res, "fungo.png"))
+    draw(FUNGO_BALL, os.path.join(res, "fungo_ball.png"))
+    draw(FUNGO_SHADOW, os.path.join(res, "fungo_shadow.png"))
+    draw(GETA_ICON, os.path.join(res, "geta.png"))
     draw(NINTH_INNING_ICON, os.path.join(loadout, "loadout_ninth_inning.png"))
-    draw(KOSHIEN_DIRT, os.path.join(loadout, "loadout_koshien_dirt.png"))
+    draw(FUNGO_ICON, os.path.join(loadout, "loadout_fungo.png"))
     draw(ELBOW_GUARD, os.path.join(loadout, "loadout_elbow_guard.png"))
+    draw(GETA_ICON, os.path.join(loadout, "loadout_geta.png"))
 
 
 if __name__ == "__main__":
