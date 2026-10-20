@@ -268,28 +268,6 @@ the packages of `port/mods/modpack.txt` (plain `./apply.sh` takes them out again
 A playable character built on Alexandria's CharacterAPI (`Loader.BuildCharacter`, data and sprites as embedded
 resources), on Convict's frames; the past and the unlock come later.
 
-- **Sprites**: `Character/playersheet.png` is Convict's atlas (512 x 1024) with every frame redrawn in place, so
-  Alexandria's sheet replacement keeps his UVs, offsets and animation library. (Its per-sprite replacement can't be
-  partial: it points the shared materials at the new page, breaking every frame not replaced.)
-  `tools/build_sheet.py` makes it from the ripped collection: all frames recolored to her palette; idle and run in
-  four directions (with the hand variants) and the dodges' upright / face-on frames get one of four drawn heads
-  (dark bob, design v4) placed by his eyes or hair, a cropped sailor top with scarf, a belt raised three rows and a
-  long skirt over the legs, geta. So do the upright frames of the other clips facing the way the clip says
-  (table kicks, item get, jetpack, doorway, chest, spin, the start of death, the Breach idles). Frames come with
-  slightly-off colors, darkened (doorway: per pixel by hue then) or lit (petting): they are snapped to his palette
-  first and the shift is redone on hers. A front view without his eyes but with his face (a blink, looking down at
-  the pet) gets her front head with the eyes shut, placed by his hair (it once got the back of her head: she
-  "turned around" for a blink in the Breach). Recolored only: the rolling dodge frames, lying / shrinking frames
-  (pitfall, spit_out), crouching at the frame's edge (item get) and ghosts.
-- **Breach idle** (`BreachIdle.cs`): her select flag is a copy of Convict's with his idle phases (Alexandria copies a
-  character's own phases onto it only for `newspritesetup` sprites). Crossing the arms stays (redrawn); his lighter /
-  smoking / trash phase is swapped by a Harmony postfix on `Foyer.SetUpCharacterCallbacks` (after Alexandria's) for
-  hers: looks down (`sukeban_scuff_in`), scuffs the floor with a geta (`sukeban_scuff`, loop 2.5-5 s), looks up
-  (`sukeban_scuff_out`). Its six frames are drawn by build_sheet.py (`SCUFF_SLOTS`) into the atlas slots of his
-  lighter idle; the clips are added to her library at start. The smoke
-  test's `breach` step checks every character's phases against the flag's library and screenshots each hold.
-  `tools/extract_frames.py` cuts a collection into PNGs for reference.
-
 - **Ninth Inning** (`skb:ninth_inning`): a kugibatto (wooden bat with nails, sarashi-wrapped grip). A copy of gun 616,
   the nailed Casey that the #NAILBAT synergy ("Careful Iteration": Casey + one of guns 26, 143 / items 457, 118)
   switches to, without Casey's +2 curse. Charged swings reflect bullets (Casey's `MegaReflection`). Sprites:
@@ -297,8 +275,6 @@ resources), on Convict's frames; the past and the unlock come later.
   layout, the rest transparent); the gun gets copies of `WeaponCollection3` and its animation library whose materials
   use it, so offsets, attach points and animations stay Casey's. The idle frame goes into the Ammonomicon's
   collection as `ninth_inning_idle_001`.
-- **One heart** (`<stats> health: 1` in `characterdata.txt`; Alexandria's `health` field stays 3 but is clamped to
-  the max): Fungo is her strength. The Elbow Guard's armor comes on top.
 - **Fungo** (`skb:fungo`, active; `Fungo.cs`, `FungoBall.cs`): tosses a ball up. It keeps her velocity at the toss
   (ULTRAKILL's coin), stops at walls, is back at hand height 0.8 s later (`SweetSpot`), bounces once and lies 8 s.
   "Hand height" is 1.5 tiles, over her head, and the ball is drawn in front of her: lower, her sprite and the bat
@@ -332,22 +308,17 @@ resources), on Convict's frames; the past and the unlock come later.
   `PassiveReflectItem.ReflectBulletsInRange`: the bat's and any other reflection), a home run kill and a kill with a
   bullet sent on by a shot ball. It is plain `Armor` the guard counts as temporary: lost first (an armor drop takes
   it first, except the Old Crest's own slot), taken away on room clear (`OnRoomClearEvent`), a new floor and a
-  strikeout. Not `HasCrest`: that is one slot only and the Old Crest quest's. The HUD tints that many of the last
-  armor icons (before the crest's) light blue: a postfix on `GameUIHeartController.UpdateHealth`, color only - the
-  game puts sprite names back itself (written for the crest) and resizes their panel. Permanent armor, restoring
+  strikeout. Not `HasCrest`: that is one slot only and the Old Crest quest's. In the HUD that many of the last
+  armor icons (before the crest's) get the guard's own icon laid over them (`Resources/temp_armor_hud.png`: the
+  guard's steel plate in the armor icon's 13 x 15 frame and rim, added to the HUD atlas with Alexandria's
+  `AddNewItemToAtlas`): a postfix on `GameUIHeartController.UpdateHealth` adds a child `dfSprite` per icon - not a
+  sprite name swap, the game puts armor sprite names back itself (written for the crest) and resizes their panel.
+  The game destroys only an icon's `dfSprite` on a hit, so the postfix destroys overlays whose icon is gone. If the
+  icon can't be added, those icons are tinted light blue instead. Permanent armor, restoring
   armor up to 2 not counting temporary armor: a triple play (a home run that touches 3 enemies) and a grand slam
   (3 home runs in a row, each within 1.2 s of the one before, no other hit or strike between). Anything over a cap is
   a ball back in Fungo's bag. A heart picked up at full health stays the game's (it goes to the health vending
   machine).
-- **Portrait** (`Character/facecard.png`, 34 x 34 like the game's dialogue portraits): drawn by
-  `tools/facecards.py` (variants; `CHOSEN` = the glare with the kugibatto behind her head). Alexandria adds it to the
-  conversation bar's atlas as `PlayerSukeban_facecard`; the smoke test's character step checks it is there and cuts it
-  out to `<character>-portrait.png`.
-- **Breach card** (`Character/foyercard/`, the card over her when you walk up): `tools/foyercard.py` frames the
-  portrait like the game's cards (38 x 38) and builds the flip-in (11 frames: the game's own edges and back, her
-  front squeezed for the halves; sizes as the Gunslinger's, whose geometry Alexandria copies) and a 4-frame idle with
-  a glint running down her hair. The smoke test's breach step opens each character's card and screenshots it.
-- Names and descriptions in English and Russian. Placeholder icons: `tools/placeholder_sprites.py`.
 
 ### Expand the Gungeon (mods with their own AssetBundles, sound banks and shaders)
 

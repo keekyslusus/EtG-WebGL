@@ -1,4 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using Alexandria.CharacterAPI;
 using Alexandria.ItemAPI;
 using HarmonyLib;
 using UnityEngine;
@@ -11,7 +14,7 @@ namespace Sukeban
     /// <item>Temporary armor (cap <see cref="TempCap"/>) for flashy plays: reflecting <see cref="ReflectsForTemp"/>+
     /// bullets with one swing, killing with a home run, killing with a bullet sent on by a shot ball. It is plain
     /// armor the guard counts as temporary: lost first, gone when the room is cleared, on a new floor and on a
-    /// strikeout. The HUD tints those armor icons (<see cref="HudPatch"/>).</item>
+    /// strikeout. The HUD lays the guard's own icon over those armor icons (<see cref="HudPatch"/>).</item>
     /// <item>Permanent armor for hard ones, restoring armor up to <see cref="PermanentCap"/> (found armor counts
     /// on top): a triple play (a home run that touches three enemies) and a grand slam (three home runs in a row,
     /// juggling, no other hit or strike between).</item>
@@ -24,7 +27,7 @@ namespace Sukeban
         public const int PermanentCap = 2;
         public const int ReflectsForTemp = 3;
 
-        // the tint of temporary armor icons in the HUD
+        // the tint of temporary armor icons in the HUD if its own icon can't be added to the HUD atlas
         public static readonly Color TempTint = new Color(0.45f, 0.85f, 1f);
 
         public static int Id;
@@ -282,14 +285,61 @@ namespace Sukeban
             }
         }
 
-        // The HUD: the last armor icons (before the Old Crest's, which the game keeps last) as many as there is
-        // temporary armor are tinted. Only the color: the game itself puts sprite names back (written for the crest).
+        // The HUD: the last armor icons (before the Old Crest's, which the game keeps last), as many as there is
+        // temporary armor, get the guard's own icon laid over them (Resources/temp_armor_hud.png, added to the HUD
+        // atlas: the steel plate in the armor icon's frame and rim). An overlay, not a sprite name: the game puts
+        // armor sprite names back itself (code written for the crest) and resizes their panel when it does. The
+        // overlay is a child of the icon, so it moves with the HUD; the game destroys only an icon's dfSprite, so
+        // overlays whose icon is gone are destroyed here. If the icon can't be added, those icons are tinted.
+        public const string TempArmorSprite = "sukeban_temp_armor";
+        private const string TempArmorResource = "Sukeban/Resources/temp_armor_hud.png";
+        private static bool s_spriteFailed;
+        private static readonly Dictionary<dfSprite, dfSprite> s_overlays = new Dictionary<dfSprite, dfSprite>();
+
+        private static bool HudIconReady(dfAtlas atlas)
+        {
+            if (atlas == null)
+            {
+                return false;
+            }
+            if (atlas[TempArmorSprite] != null)
+            {
+                return true;
+            }
+            if (s_spriteFailed)
+            {
+                return false;
+            }
+            try
+            {
+                atlas.AddNewItemToAtlas(TempArmorResource, TempArmorSprite, Plugin.Assembly);
+            }
+            catch (Exception e)
+            {
+                Debug.Log("[ElbowGuard] the temporary armor icon couldn't be added to the HUD atlas, tinting instead: " + e.Message);
+            }
+            s_spriteFailed = atlas[TempArmorSprite] == null;
+            return !s_spriteFailed;
+        }
+
         [HarmonyPatch(typeof(GameUIHeartController), nameof(GameUIHeartController.UpdateHealth))]
         private static class HudPatch
         {
             [HarmonyPostfix]
             private static void Postfix(GameUIHeartController __instance, HealthHaver hh)
             {
+                foreach (dfSprite icon in s_overlays.Keys.ToList())
+                {
+                    if (!icon)
+                    {
+                        dfSprite gone = s_overlays[icon];
+                        if (gone)
+                        {
+                            Destroy(gone.gameObject);
+                        }
+                        s_overlays.Remove(icon);
+                    }
+                }
                 List<dfSprite> armors = __instance.extantArmors;
                 if (armors == null || hh == null)
                 {
@@ -298,13 +348,40 @@ namespace Sukeban
                 ArmoredElbowGuard guard = For(hh.gameActor as PlayerController);
                 int temp = guard == null ? 0 : guard.m_temp;
                 int end = armors.Count - (hh.HasCrest ? 1 : 0);
-                Color normal = __instance.armorSpritePrefab ? __instance.armorSpritePrefab.Color : Color.white;
+                dfSprite prefab = __instance.armorSpritePrefab;
+                Color normal = prefab ? (Color)prefab.Color : Color.white;
+                bool overlay = temp > 0 && prefab && HudIconReady(prefab.Atlas);
                 for (int i = 0; i < end; i++)
                 {
                     dfSprite icon = armors[i];
-                    if (icon)
+                    if (!icon)
                     {
-                        icon.Color = i >= end - temp ? TempTint : normal;
+                        continue;
+                    }
+                    bool isTemp = i >= end - temp;
+                    s_overlays.TryGetValue(icon, out dfSprite cover);
+                    if (isTemp && overlay)
+                    {
+                        if (!cover)
+                        {
+                            cover = icon.AddControl<dfSprite>();
+                            cover.name = TempArmorSprite;
+                            cover.Atlas = icon.Atlas;
+                            cover.SpriteName = TempArmorSprite;
+                            s_overlays[icon] = cover;
+                        }
+                        cover.Size = icon.Size;
+                        cover.RelativePosition = Vector3.zero;
+                        cover.IsVisible = true;
+                        icon.Color = normal;
+                    }
+                    else
+                    {
+                        if (cover)
+                        {
+                            cover.IsVisible = false;
+                        }
+                        icon.Color = isTemp ? TempTint : normal;
                     }
                 }
             }
