@@ -3,11 +3,13 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using Dungeonator;
 using UnityEngine;
 
 // Phase "characters", the Sukeban's own mechanics (port/mods/Sukeban): Fungo's toss and the bat swing that hits the
 // ball, at several timings from the sweet spot; three balls juggled by taps; three fouls in a row (a strikeout);
-// balls let drop and picked up again, the empty bag; the Geta's roll (reload finished, instant charge). Through the player's own input like the charged attack; the mod only through
+// a ball shot with a bullet, then a chain of two, at an enemy put next to her; balls let drop and picked up again,
+// the empty bag; the Geta's roll (reload finished, instant charge). Through the player's own input like the charged attack; the mod only through
 // reflection.
 namespace EtgModSmoke
 {
@@ -41,6 +43,7 @@ namespace EtgModSmoke
                 }
                 yield return FungoJuggle(s, p, fungo, ballType, sweet);
                 yield return FungoStrikeout(s, p, fungo, ballType, sweet);
+                yield return FungoShoot(s, p, fungo, ballType);
                 yield return FungoDrop(s, p, fungo);
             }
             if (p != null && FindType(SukebanAssembly, "Sukeban.Geta") != null)
@@ -297,6 +300,134 @@ namespace EtgModSmoke
             // they land under her (she stands still) and are picked up as they come to rest; regrowing takes longer
             yield return Wait(1.4f);
             s.notes.Add("fungo: " + before + " balls, after three tosses " + empty + "; 1.4 s later " + Balls(fungo) + " balls");
+        }
+
+        // Shooting the ball (ULTRAKILL's coin): a Bullet Kin 5 tiles to her right, a ball tossed and a bullet of hers
+        // (38 Special's) fired at it on the way up; then two balls and one bullet (a chain). The bullet's damage
+        // multiplier, the chain length and the enemy's health are noted.
+        private IEnumerator FungoShoot(StepResult s, PlayerController p, PlayerItem fungo, Type ballType)
+        {
+            Act("fungo: shoot the ball");
+            // somewhere open: the start room has the elevator's colliders right above where she stands
+            yield return WarpToOpenCell(p);
+            AIActor prefab = EnemyDatabase.GetOrLoadByGuid("01972dee89fc4404a5c408d50007dad5");
+            AIActor enemy = prefab == null || p.CurrentRoom == null ? null
+                : AIActor.Spawn(prefab, p.CenterPosition + new Vector2(5f, 0f), p.CurrentRoom, true, AIActor.AwakenAnimationType.Default, true);
+            if (enemy != null)
+            {
+                m_spawned.Add(enemy.gameObject);
+            }
+            yield return Wait(1.5f);
+            for (int balls = 1; balls <= 2; balls++)
+            {
+                yield return WaitForBalls(fungo, balls);
+                FieldInfo links = ballType.GetField("LastShotLinks", BindingFlags.Static | BindingFlags.Public);
+                links.SetValue(null, 0);
+                float hpBefore = enemy != null && enemy.healthHaver != null ? enemy.healthHaver.GetCurrentHealth() : -1f;
+                List<UnityEngine.Object> known = new List<UnityEngine.Object>();
+                UnityEngine.Object first = TossBall(p, fungo, ballType, known);
+                yield return null;
+                UnityEngine.Object second = null;
+                if (balls == 2)
+                {
+                    yield return Wait(0.15f);
+                    second = TossBall(p, fungo, ballType, known);
+                    yield return null;
+                }
+                float end = Now + 2f;
+                // still low (about her head): high up, the ball can be drawn over the room's north wall, which a
+                // bullet can't get through
+                while (first && Now < end && (float)InstanceMember(first, "m_t") < 0.05f)
+                {
+                    yield return null;
+                }
+                float damage = -1f;
+                Projectile bullet = null;
+                if (first)
+                {
+                    // from just left of the ball, flying right through it (no wall in the way)
+                    Vector2 target = (Vector2)InstanceMember(first, "Visual");
+                    bullet = SpawnPlayerBullet(p, target - new Vector2(1.2f, 0f), target);
+                    damage = bullet == null ? -1f : bullet.baseData.damage;
+                }
+                // follow the bullet: how close it came to the enemy, how long it lived
+                float closest = float.MaxValue;
+                float lived = 0f;
+                float start = Now;
+                while (Now < start + 1.2f)
+                {
+                    if (bullet && bullet.specRigidbody && enemy != null)
+                    {
+                        closest = Mathf.Min(closest, Vector2.Distance(bullet.specRigidbody.UnitCenter, enemy.CenterPosition));
+                        lived = Now - start;
+                    }
+                    yield return null;
+                }
+                s.notes.Add("fungo shot bullet: lived " + Fmt(lived) + " s, closest to the enemy " + Fmt(closest) +
+                            " tiles; enemy vulnerable " + (enemy != null && enemy.healthHaver != null && enemy.healthHaver.IsVulnerable) +
+                            ", at " + (enemy == null ? "-" : enemy.CenterPosition.ToString()) + ", player at " + p.CenterPosition);
+                float hpAfter = enemy != null && enemy.healthHaver != null ? enemy.healthHaver.GetCurrentHealth() : -1f;
+                s.notes.Add("fungo shot " + balls + " ball" + (balls == 1 ? "" : "s") + ": bullet damage " + Fmt(damage) +
+                            ", chain links " + StaticMember(ballType, "LastShotLinks") + ", multiplier x" +
+                            Fmt(Convert.ToSingle(StaticMember(ballType, "LastShotMultiplier"), CultureInfo.InvariantCulture)) +
+                            ", balls left in the air " + ((first ? 1 : 0) + (second ? 1 : 0)) +
+                            ", enemy health " + Fmt(hpBefore) + " -> " + (enemy == null ? "gone" : Fmt(hpAfter)));
+            }
+        }
+
+        // Into a free 7 x 7 tiles spot of another non-boss room, its own enemies erased.
+        private IEnumerator WarpToOpenCell(PlayerController p)
+        {
+            foreach (RoomHandler room in new List<RoomHandler>(GameManager.Instance.Dungeon.data.rooms))
+            {
+                if (room == null || room == p.CurrentRoom || (room.area != null && room.area.PrototypeRoomCategory == PrototypeDungeonRoom.RoomCategory.BOSS))
+                {
+                    continue;
+                }
+                IntVector2? cell = room.GetRandomAvailableCell(new IntVector2(7, 7), CellTypes.FLOOR, false, null);
+                if (!cell.HasValue)
+                {
+                    continue;
+                }
+                Act("warp to " + room.GetRoomName() + " to shoot");
+                p.WarpToPoint(cell.Value.ToVector2() + new Vector2(3.5f, 3.5f), false, false);
+                yield return Wait(0.75f);
+                if (p.CurrentRoom != null)
+                {
+                    List<AIActor> enemies = p.CurrentRoom.GetActiveEnemies(RoomHandler.ActiveEnemyType.All);
+                    if (enemies != null)
+                    {
+                        foreach (AIActor a in enemies.ToArray())
+                        {
+                            if (a != null && a.healthHaver != null && !a.healthHaver.IsBoss)
+                            {
+                                a.EraseFromExistence(true);
+                            }
+                        }
+                    }
+                }
+                yield break;
+            }
+        }
+
+        // A bullet of hers (38 Special's) from a point toward another.
+        private static Projectile SpawnPlayerBullet(PlayerController p, Vector2 from, Vector2 target)
+        {
+            Gun source = PickupObjectDatabase.GetById(56) as Gun;
+            Projectile prefab = source == null ? null : source.DefaultModule.projectiles[0];
+            if (prefab == null)
+            {
+                return null;
+            }
+            GameObject o = SpawnManager.SpawnProjectile(prefab.gameObject, from, Quaternion.Euler(0f, 0f, BraveMathCollege.Atan2Degrees(target - from)), true);
+            Projectile proj = o.GetComponent<Projectile>();
+            proj.Owner = p;
+            proj.Shooter = p.specRigidbody;
+            proj.collidesWithPlayer = false;
+            proj.collidesWithEnemies = true;
+            proj.baseData.speed = 20f;
+            proj.UpdateSpeed();
+            return proj;
         }
 
         private IEnumerator GetaRoll(StepResult s, PlayerController p)

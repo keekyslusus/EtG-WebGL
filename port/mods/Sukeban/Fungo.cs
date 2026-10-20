@@ -61,12 +61,14 @@ namespace Sukeban
                 "A bag of scuffed practice balls. She hits them alone after everyone else has gone home.\n\n" +
                 "Tosses a ball up. Swing a bat as it comes down: the better the timing, the harder the hit. " +
                 "While a ball is within reach the bat swings at once. Clean hits put the ball back in the bag; " +
-                "fouls are strikes, and three strikes shut the bag for a while. Dropped balls can be picked up again.",
+                "fouls are strikes, and three strikes shut the bag for a while. Shooting a ball in the air sends the " +
+                "shot on to the nearest enemy, harder (or to the next ball). Dropped balls can be picked up again.",
                 "Фунго", "Тренировка отбивания",
                 "Мешок потёртых тренировочных мячей. Она отбивает их одна, когда все уже ушли домой.\n\n" +
                 "Подбрасывает мяч. Взмахни битой, когда он падает: чем точнее момент, тем сильнее удар. " +
                 "Пока мяч рядом, бита бьёт без замаха. Чистый удар возвращает мяч в мешок; фол - это страйк, " +
-                "после трёх страйков мешок ненадолго закрывается. Упавший мяч можно подобрать.");
+                "после трёх страйков мешок ненадолго закрывается. Выстрел в мяч в воздухе отправляет пулю в ближайшего " +
+                "врага, сильнее (или в следующий мяч). Упавший мяч можно подобрать.");
             item.SetCooldownType(ItemBuilder.CooldownType.Timed, RegenSeconds);
             // numberOfUses is the balls in hand; PlayerItem shows the count while there is more than one
             item.numberOfUses = MaxBalls;
@@ -89,6 +91,7 @@ namespace Sukeban
             SpriteBuilder.AddSpriteToCollection("Sukeban/Resources/fungo_ball", ETGMod.Databases.Items.ProjectileCollection, Plugin.Assembly);
             HitPrefab.SetProjectileSpriteRight("fungo_ball", 6, 6, false, tk2dBaseSprite.Anchor.MiddleCenter);
             HitPrefab.shouldRotate = false;
+            hit.AddComponent<FungoHitBall>();
         }
 
         private static GameObject Sprite(string name, string resource)
@@ -276,6 +279,10 @@ namespace Sukeban
 
         private void OnBatShot(Projectile shot)
         {
+            if (shot && !shot.GetComponent<FungoBatShot>())
+            {
+                shot.gameObject.AddComponent<FungoBatShot>();
+            }
             if (Time.frameCount == m_swingFrame || !m_owner || !m_hookedGun)
             {
                 return;

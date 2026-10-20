@@ -314,7 +314,11 @@ resources), on Convict's frames; the past and the unlock come later.
   it back. Against tossing and swinging sloppily: a foul is a strike (speech bubble "Strike N!") and switches the
   quick swing off for 0.75 s; three strikes with no clean hit between and none older than 4 s are a strikeout
   ("Strikeout!", her past): the bag is shut for 3 s (shown on the cooldown bar) and the balls in the air turn grey
-  and drop unhittable. Quick swing: while one of her balls is within reach and within 0.35 s of its
+  and drop unhittable. Shooting the ball (ULTRAKILL's coin): a bullet of hers passing within 0.75 tiles of a ball
+  in the air (checked along its path each frame) is redirected - to her next ball in the air (a chain) or else to
+  the enemy nearest the ball - steering to it every frame (`FungoChainShot`), damage x2 for the first ball and x1.5
+  for each next, speed at least 35; it keeps everything it carries. The ball is spent. Her hit balls
+  (`FungoHitBall`) and the bat's own shots (`FungoBatShot`) don't count; bullets the bat reflected do. Quick swing: while one of her balls is within reach and within 0.35 s of its
   sweet spot, the bat's charge is x60 (a frame instead of 1 s) and its 1 s reload is cut short
   (`ForceImmediateReload`), so three balls tossed in a row can be hit by three taps. Timing cue on the ball (the bat
   has its own charged flash): it warms from white to orange over the 0.3 s before the sweet spot and is gold and 1.5x
@@ -428,7 +432,9 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    changed; its actives are used again in five rooms with a screenshot each (`<character>-room<N>.png`). The Sukeban
    also gets `SmokeSukeban.cs`: Fungo swings at several timings from the sweet spot (hit kind, timing, hit balls),
    three balls tossed in a row and hit by taps, three fouls in a row (strikeout: bag shut, the ball in the air
-   unhittable, open again 3 s later), three balls let drop and picked up, and a Geta dodge roll (reload finished,
+   unhittable, open again 3 s later), a ball and then a chain of two shot with a bullet at a Bullet Kin next to her
+   in an open spot of another room (multiplier, links, its health; in the start room the elevator's colliders right
+   above her stop the bullet), three balls let drop and picked up, and a Geta dodge roll (reload finished,
    a swing right out of it). Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
    and idle phases (clips present; each hold played and screenshot).
 

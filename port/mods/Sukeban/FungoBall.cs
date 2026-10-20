@@ -54,6 +54,19 @@ namespace Sukeban
         public static float LastTiming;
         public static int Tossed;
 
+        // Shooting the ball (ULTRAKILL's coin): a bullet of hers that passes within ShotRadius of a ball in the air is
+        // redirected - to another of her balls in the air (a chain) or else to the enemy nearest the ball - and keeps
+        // all it carries (fire, poison, piercing, explosions). Its damage x2 for the first ball, x1.5 for each next
+        // one. The ball is spent. Her own hit balls and the bat's swing don't count; bullets the bat reflected do.
+        public const float ShotRadius = 0.75f;
+        public const float FirstShotMultiplier = 2f;
+        public const float ChainMultiplier = 1.5f;
+        public const float ShotSpeed = 35f;
+
+        /// <summary>The last shot ball's chain length and the bullet's damage multiplier so far: for the smoke test.</summary>
+        public static int LastShotLinks;
+        public static float LastShotMultiplier;
+
         private static readonly List<FungoBall> s_live = new List<FungoBall>();
 
         private PlayerController m_owner;
@@ -267,6 +280,108 @@ namespace Sukeban
             return !data.CheckInBoundsAndValid(cell) || data.isWall(cell.x, cell.y);
         }
 
+        /// <summary>Where the ball is drawn (its middle): what bullets have to hit.</summary>
+        public Vector2 Visual => m_ground + new Vector2(0f, m_height + 0.1875f);
+
+        // Whether one of her bullets went through the ball this frame (along its path: fast bullets move more than
+        // the ball's size per frame); if so it is redirected and the ball is spent.
+        private bool CheckShot(float dt)
+        {
+            Vector2 at = Visual;
+            foreach (Projectile p in StaticReferenceManager.AllProjectiles)
+            {
+                if (!p || p.Owner != m_owner || !p.specRigidbody || p.GetComponent<FungoHitBall>() || p.GetComponent<FungoBatShot>())
+                {
+                    continue;
+                }
+                Vector2 now = p.specRigidbody.UnitCenter;
+                Vector2 before = now - p.specRigidbody.Velocity * dt;
+                if (DistanceToSegment(at, before, now) <= ShotRadius)
+                {
+                    Shot(p, at);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static float DistanceToSegment(Vector2 point, Vector2 a, Vector2 b)
+        {
+            Vector2 ab = b - a;
+            float t = ab.sqrMagnitude < 1e-6f ? 0f : Mathf.Clamp01(Vector2.Dot(point - a, ab) / ab.sqrMagnitude);
+            return Vector2.Distance(point, a + ab * t);
+        }
+
+        private void Shot(Projectile p, Vector2 at)
+        {
+            FungoChainShot chain = p.GetComponent<FungoChainShot>();
+            if (chain == null)
+            {
+                chain = p.gameObject.AddComponent<FungoChainShot>();
+            }
+            chain.Links++;
+            float multiplier = chain.Links == 1 ? FirstShotMultiplier : ChainMultiplier;
+            chain.Multiplier *= multiplier;
+            p.baseData.damage *= multiplier;
+            p.baseData.speed = Mathf.Max(p.baseData.speed, ShotSpeed);
+            p.UpdateSpeed();
+
+            // the next link: her nearest other ball still in the air, else the enemy nearest this one
+            FungoBall nextBall = null;
+            float best = float.MaxValue;
+            foreach (FungoBall other in s_live)
+            {
+                if (other && other != this && other.m_owner == m_owner && !other.m_lying && !other.m_dead)
+                {
+                    float d = Vector2.Distance(other.Visual, at);
+                    if (d < best)
+                    {
+                        best = d;
+                        nextBall = other;
+                    }
+                }
+            }
+            chain.TargetBall = nextBall;
+            chain.TargetEnemy = nextBall ? null : NearestEnemy(m_owner, at);
+            chain.Steer(true);
+
+            LastShotLinks = chain.Links;
+            LastShotMultiplier = chain.Multiplier;
+            Debug.Log("[Fungo] ball shot: link " + chain.Links + ", damage x" + chain.Multiplier.ToString("0.##") +
+                      (nextBall ? ", on to the next ball" : chain.TargetEnemy ? ", on to " + chain.TargetEnemy.name : ", no enemy"));
+            AkSoundEngine.PostEvent("Play_WPN_duelingpistol_impact_01", gameObject);
+            if (chain.Links >= 2)
+            {
+                GameManager.Instance.MainCameraController.DoScreenShake(0.4f, 8f, 0.1f, 0.1f, null);
+            }
+            Destroy(gameObject);
+        }
+
+        private static AIActor NearestEnemy(PlayerController owner, Vector2 at)
+        {
+            RoomHandler room = owner.CurrentRoom;
+            List<AIActor> enemies = room == null ? null : room.GetActiveEnemies(RoomHandler.ActiveEnemyType.All);
+            AIActor best = null;
+            float bestDistance = float.MaxValue;
+            if (enemies != null)
+            {
+                foreach (AIActor a in enemies)
+                {
+                    if (!a || !a.healthHaver || a.healthHaver.IsDead)
+                    {
+                        continue;
+                    }
+                    float d = Vector2.Distance(at, a.CenterPosition);
+                    if (d < bestDistance)
+                    {
+                        best = a;
+                        bestDistance = d;
+                    }
+                }
+            }
+            return best;
+        }
+
         private void Update()
         {
             float dt = BraveTime.DeltaTime;
@@ -281,6 +396,10 @@ namespace Sukeban
                 return;
             }
 
+            if (!m_dead && CheckShot(dt))
+            {
+                return;
+            }
             m_t += dt;
             Vector2 next = m_ground + m_velocity * dt;
             if (Blocked(next))
@@ -374,6 +493,71 @@ namespace Sukeban
         private void OnDestroy()
         {
             s_live.Remove(this);
+        }
+    }
+
+    /// <summary>Marks her hit balls (they don't shoot other balls).</summary>
+    public class FungoHitBall : MonoBehaviour
+    {
+    }
+
+    /// <summary>Marks the bat's own shots (the swing hits balls by timing, not as a bullet).</summary>
+    public class FungoBatShot : MonoBehaviour
+    {
+    }
+
+    /// <summary>
+    /// A bullet that shot a <see cref="FungoBall"/>: steers every frame to its next target (another ball of the chain,
+    /// or an enemy) until it gets there, the way ULTRAKILL's coin shots never miss.
+    /// </summary>
+    public class FungoChainShot : MonoBehaviour
+    {
+        public int Links;
+        public float Multiplier = 1f;
+        public FungoBall TargetBall;
+        public AIActor TargetEnemy;
+        private Projectile m_projectile;
+
+        public void Steer(bool resetDistance)
+        {
+            if (m_projectile == null)
+            {
+                m_projectile = GetComponent<Projectile>();
+            }
+            if (!m_projectile || !m_projectile.specRigidbody)
+            {
+                return;
+            }
+            Vector2 from = m_projectile.specRigidbody.UnitCenter;
+            Vector2? to = null;
+            if (TargetBall)
+            {
+                to = TargetBall.Visual;
+            }
+            else if (TargetEnemy && TargetEnemy.healthHaver && !TargetEnemy.healthHaver.IsDead)
+            {
+                to = TargetEnemy.CenterPosition;
+            }
+            if (to.HasValue && (to.Value - from).sqrMagnitude > 0.01f)
+            {
+                m_projectile.SendInDirection(to.Value - from, resetDistance);
+            }
+        }
+
+        private void Start()
+        {
+            // for tuning: what the chain shot hit and for how much
+            Projectile p = GetComponent<Projectile>();
+            if (p)
+            {
+                p.OnHitEnemy += (proj, body, fatal) => Debug.Log("[Fungo] chain shot hit " + (body ? body.name : "?") +
+                    " for " + proj.baseData.damage.ToString("0.#") + (fatal ? ", fatal" : ""));
+            }
+        }
+
+        private void Update()
+        {
+            Steer(false);
         }
     }
 
