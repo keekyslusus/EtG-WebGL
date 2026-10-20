@@ -299,7 +299,7 @@ namespace EtgModSmoke
             }
             foreach (StepResult s in characters)
             {
-                yield return StartCoroutine(RunStep(s, CharacterTest(s), 120f));
+                yield return StartCoroutine(RunStep(s, CharacterTest(s), 180f));
             }
             if (characters.Count > 0)
             {

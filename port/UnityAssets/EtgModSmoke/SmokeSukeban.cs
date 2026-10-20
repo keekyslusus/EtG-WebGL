@@ -9,7 +9,8 @@ using UnityEngine;
 // Phase "characters", the Sukeban's own mechanics (port/mods/Sukeban): Fungo's toss and the bat swing that hits the
 // ball, at several timings from the sweet spot; three balls juggled by taps; three fouls in a row (a strikeout);
 // a ball shot with a bullet, then a chain of two, at an enemy put next to her; balls let drop and picked up again,
-// the empty bag; the Geta's roll (reload finished, instant charge). Through the player's own input like the charged attack; the mod only through
+// the empty bag; the Geta's roll (reload finished, instant charge). Along the way the Elbow Guard's armor rewards
+// (grand slam, kills, three reflected bullets, triple play) and its temporary armor burning (strikeout, room clear). Through the player's own input like the charged attack; the mod only through
 // reflection.
 namespace EtgModSmoke
 {
@@ -42,14 +43,145 @@ namespace EtgModSmoke
                     yield return FungoSwing(s, p, fungo, ballType, sweet + off, off);
                 }
                 yield return FungoJuggle(s, p, fungo, ballType, sweet);
-                yield return FungoStrikeout(s, p, fungo, ballType, sweet);
+                ArmorNote(s, p, "after the juggle (grand slam)");
                 yield return FungoShoot(s, p, fungo, ballType);
+                ArmorNote(s, p, "after the shot balls (a kill)");
+                yield return GuardReflect(s, p);
+                ArmorNote(s, p, "after reflecting three bullets");
+                // the HUD with temporary armor (tinted icons): <character>-armor-hud.png
+                string hud = s.id + "-armor-hud.png";
+                ScreenCapture.CaptureScreenshot(System.IO.Path.Combine(m_reportDir, hud));
+                s.notes.Add("armor HUD screenshot " + hud);
+                yield return Wait(0.3f);
+                yield return FungoStrikeout(s, p, fungo, ballType, sweet);
+                ArmorNote(s, p, "after the strikeout");
+                GuardRoomClear(s, p);
+                yield return FungoTriplePlay(s, p, fungo, ballType, sweet);
+                ArmorNote(s, p, "after the triple play (its room cleared too)");
                 yield return FungoDrop(s, p, fungo);
             }
             if (p != null && FindType(SukebanAssembly, "Sukeban.Geta") != null)
             {
                 yield return GetaRoll(s, p);
             }
+        }
+
+        private static PassiveItem Guard(PlayerController p)
+        {
+            foreach (PassiveItem i in p.passiveItems)
+            {
+                if (i != null && i.GetType().FullName == "Sukeban.ArmoredElbowGuard")
+                {
+                    return i;
+                }
+            }
+            return null;
+        }
+
+        // armor, how much of it is the Elbow Guard's temporary armor, its last reward
+        private void ArmorNote(StepResult s, PlayerController p, string when)
+        {
+            PassiveItem guard = Guard(p);
+            if (guard == null)
+            {
+                return;
+            }
+            s.notes.Add("armor " + when + ": " + Fmt(p.healthHaver.Armor) + " (temporary " + InstanceMember(guard, "TempArmor") +
+                        "), last reward: " + StaticMember(guard.GetType(), "LastReward"));
+        }
+
+        // Three enemy bullets just past the bat's barrel as a charged swing lets go: reflecting three at once is
+        // worth temporary armor.
+        private IEnumerator GuardReflect(StepResult s, PlayerController p)
+        {
+            Act("elbow guard: reflect three bullets with one swing");
+            Gun gun = p.CurrentGun;
+            if (gun == null)
+            {
+                yield break;
+            }
+            float reloadEnd = Now + 3f;
+            while (gun != null && gun.IsReloading && Now < reloadEnd)
+            {
+                yield return null;
+            }
+            p.forceFireDown = true;
+            yield return null;
+            p.forceFireDown = false;
+            p.forceFire = true;
+            // a reload the last quick swings left (it starts with this press, 1 s), then the 1 s charge
+            yield return Wait(CharacterChargeSeconds + 1f - 0.25f);
+            for (int i = 0; i < 3 && gun != null; i++)
+            {
+                Projectile b = SpawnEnemyBullet(gun);
+                if (b != null)
+                {
+                    m_spawned.Add(b.gameObject);
+                }
+            }
+            yield return Wait(0.25f);
+            p.forceFire = false;
+            p.forceFireUp = true;
+            yield return null;
+            p.forceFireUp = false;
+            yield return Wait(0.5f);
+        }
+
+        // Three Bullet Kins in a row to her right and a home run at them: the first dies (a home run kill, temporary
+        // armor), the ball carries on to the other two (a triple play, armor). With no temporary armor left (a room
+        // clear before), one armor is taken first so there's room under the cap of two.
+        private IEnumerator FungoTriplePlay(StepResult s, PlayerController p, PlayerItem fungo, Type ballType, float sweet)
+        {
+            Act("fungo: triple play");
+            yield return WarpToOpenCell(p);
+            p.healthHaver.Armor = Mathf.Max(0f, p.healthHaver.Armor - 1f);
+            AIActor prefab = EnemyDatabase.GetOrLoadByGuid("01972dee89fc4404a5c408d50007dad5");
+            List<AIActor> kins = new List<AIActor>();
+            for (int i = 0; i < 3 && prefab != null && p.CurrentRoom != null; i++)
+            {
+                AIActor kin = AIActor.Spawn(prefab, p.CenterPosition + new Vector2(3.5f + 1.5f * i, (i - 1) * 1.2f), p.CurrentRoom, true, AIActor.AwakenAnimationType.Default, true);
+                if (kin != null)
+                {
+                    kins.Add(kin);
+                    m_spawned.Add(kin.gameObject);
+                }
+            }
+            yield return Wait(1.5f);
+            yield return WaitForBalls(fungo, 1);
+            ArmorNote(s, p, "before the triple play (one armor taken)");
+            p.forceAimPoint = p.CenterPosition + new Vector2(5f, 0f);
+            FieldInfo lastHit = ballType.GetField("LastHit", BindingFlags.Static | BindingFlags.Public);
+            lastHit.SetValue(null, Enum.ToObject(lastHit.FieldType, 0));
+            UnityEngine.Object ball = TossBall(p, fungo, ballType, new List<UnityEngine.Object>());
+            yield return null;
+            yield return TapAt(p, ball, sweet);
+            yield return Wait(1.5f);
+            p.forceAimPoint = null;
+            int dead = 0;
+            foreach (AIActor kin in kins)
+            {
+                if (kin == null || kin.healthHaver == null || kin.healthHaver.IsDead)
+                {
+                    dead++;
+                }
+            }
+            s.notes.Add("triple play: hit " + lastHit.GetValue(null) + ", " + dead + " of " + kins.Count + " Bullet Kins dead");
+        }
+
+        // The room cleared (the guard's handler called as the player's OnRoomClearEvent would): temporary armor gone.
+        private void GuardRoomClear(StepResult s, PlayerController p)
+        {
+            PassiveItem guard = Guard(p);
+            if (guard == null)
+            {
+                return;
+            }
+            MethodInfo clear = guard.GetType().GetMethod("OnRoomClear", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            if (clear != null)
+            {
+                clear.Invoke(guard, new object[] { p });
+            }
+            ArmorNote(s, p, "after a room clear");
         }
 
         private static int Balls(PlayerItem fungo)
@@ -246,20 +378,20 @@ namespace EtgModSmoke
         {
             Act("fungo: three fouls, a strikeout");
             FieldInfo lastHit = ballType.GetField("LastHit", BindingFlags.Static | BindingFlags.Public);
-            // strikes older than the strike memory (4 s) are forgotten
+            // strikes older than the strike memory (4 s) are forgotten; a full bag so the fouls come quickly
             yield return Wait(4.5f);
+            yield return WaitForBalls(fungo, 3);
             List<UnityEngine.Object> known = new List<UnityEngine.Object>();
             List<string> taps = new List<string>();
             UnityEngine.Object spare = null;
             for (int i = 0; i < 3; i++)
             {
-                yield return WaitForBalls(fungo, i == 2 ? 2 : 1);
                 // the quick swing is off for 0.75 s after a strike
                 yield return Wait(0.9f);
                 lastHit.SetValue(null, Enum.ToObject(lastHit.FieldType, 0));
                 UnityEngine.Object ball = TossBall(p, fungo, ballType, known);
                 yield return null;
-                if (i == 2)
+                if (i == 2 && fungo.CanBeUsed(p))
                 {
                     // a second ball, tossed just before the third foul: far from its own window then, so the swing
                     // takes the first one (one ball per swing, the best-timed)

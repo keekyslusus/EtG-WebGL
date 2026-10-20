@@ -550,8 +550,21 @@ namespace Sukeban
             Projectile p = GetComponent<Projectile>();
             if (p)
             {
-                p.OnHitEnemy += (proj, body, fatal) => Debug.Log("[Fungo] chain shot hit " + (body ? body.name : "?") +
-                    " for " + proj.baseData.damage.ToString("0.#") + (fatal ? ", fatal" : ""));
+                p.OnHitEnemy += OnHitEnemy;
+            }
+        }
+
+        private bool m_killed;
+
+        private void OnHitEnemy(Projectile proj, SpeculativeRigidbody body, bool fatal)
+        {
+            Debug.Log("[Fungo] chain shot hit " + (body ? body.name : "?") + " for " +
+                      proj.baseData.damage.ToString("0.#") + (fatal ? ", fatal" : ""));
+            // the Elbow Guard's reward for a kill with a bullet sent on by a ball
+            if (fatal && !m_killed && proj.Owner is PlayerController player)
+            {
+                m_killed = true;
+                ArmoredElbowGuard.AwardTemp(player, "shot ball kill");
             }
         }
 
@@ -564,6 +577,7 @@ namespace Sukeban
     /// <summary>A home run carries on from each enemy it hits to the nearest one it hasn't hit, <see cref="Left"/> times.</summary>
     public class FungoRicochet : MonoBehaviour
     {
+        public const int TriplePlayEnemies = 3;
         public int Left;
         public const float SearchRadius = 12f;
         private readonly List<AIActor> m_hit = new List<AIActor>();
@@ -573,11 +587,28 @@ namespace Sukeban
             GetComponent<Projectile>().OnHitEnemy += OnHitEnemy;
         }
 
+        private bool m_killed;
+        private bool m_triplePlay;
+
         private void OnHitEnemy(Projectile p, SpeculativeRigidbody body, bool fatal)
         {
-            if (body && body.aiActor)
+            if (body && body.aiActor && !m_hit.Contains(body.aiActor))
             {
                 m_hit.Add(body.aiActor);
+            }
+            if (p.Owner is PlayerController player)
+            {
+                // the Elbow Guard's rewards: a home run kill, a home run touching three enemies
+                if (fatal && !m_killed)
+                {
+                    m_killed = true;
+                    ArmoredElbowGuard.AwardTemp(player, "home run kill");
+                }
+                if (m_hit.Count >= TriplePlayEnemies && !m_triplePlay)
+                {
+                    m_triplePlay = true;
+                    ArmoredElbowGuard.AwardPermanent(player, "triple play", "Triple play!", "Трипл-плей!");
+                }
             }
             if (Left <= 0 || !(p.Owner is PlayerController owner) || owner.CurrentRoom == null)
             {

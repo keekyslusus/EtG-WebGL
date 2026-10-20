@@ -327,8 +327,18 @@ resources), on Convict's frames; the past and the unlock come later.
 - **Geta** (`skb:geta`, passive): during a dodge roll and 0.4 s after, reloads finish at once
   (`ForceImmediateReload`; the bat starts its reload a moment after the swing) and `ChargeAmountMultiplier` is x25 (the bat's 1 s charge becomes a few
   frames: swing out of the roll, also while Fungo is struck out); rolling picks a lying ball up from twice as far.
-- **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup; a Harmony postfix on
-  `PassiveReflectItem.ReflectBulletsInRange` (all reflections, the bat's included) gives +1.5 speed for 3 s.
+- **Armored Elbow Guard** (`skb:armored_elbow_guard`): +1 armor on the first pickup, and armor for playing well.
+  Temporary armor (cap 2) for 3+ bullets reflected at once (a Harmony postfix on
+  `PassiveReflectItem.ReflectBulletsInRange`: the bat's and any other reflection), a home run kill and a kill with a
+  bullet sent on by a shot ball. It is plain `Armor` the guard counts as temporary: lost first (an armor drop takes
+  it first, except the Old Crest's own slot), taken away on room clear (`OnRoomClearEvent`), a new floor and a
+  strikeout. Not `HasCrest`: that is one slot only and the Old Crest quest's. The HUD tints that many of the last
+  armor icons (before the crest's) light blue: a postfix on `GameUIHeartController.UpdateHealth`, color only - the
+  game puts sprite names back itself (written for the crest) and resizes their panel. Permanent armor, restoring
+  armor up to 2 not counting temporary armor: a triple play (a home run that touches 3 enemies) and a grand slam
+  (3 home runs in a row, each within 1.2 s of the one before, no other hit or strike between). Anything over a cap is
+  a ball back in Fungo's bag. A heart picked up at full health stays the game's (it goes to the health vending
+  machine).
 - **Portrait** (`Character/facecard.png`, 34 x 34 like the game's dialogue portraits): drawn by
   `tools/facecards.py` (variants; `CHOSEN` = the glare with the kugibatto behind her head). Alexandria adds it to the
   conversation bar's atlas as `PlayerSukeban_facecard`; the smoke test's character step checks it is there and cuts it
@@ -434,7 +444,8 @@ screen, starts a run as the Pilot with MtG API's godmode, then:
    three balls tossed in a row and hit by taps, three fouls in a row (strikeout: bag shut, the ball in the air
    unhittable, open again 3 s later), a ball and then a chain of two shot with a bullet at a Bullet Kin next to her
    in an open spot of another room (multiplier, links, its health; in the start room the elevator's colliders right
-   above her stop the bullet), three balls let drop and picked up, and a Geta dodge roll (reload finished,
+   above her stop the bullet), the Elbow Guard's armor after each (grand slam, kills, three reflected bullets, a
+   triple play at three Bullet Kins, strikeout and room clear burning temporary armor), three balls let drop and picked up, and a Geta dodge roll (reload finished,
    a swing right out of it). Last a `breach` step does "Quit to Breach" and checks each one's select flag (`NPC_FoyerCharacter_<name>`)
    and idle phases (clips present; each hold played and screenshot).
 

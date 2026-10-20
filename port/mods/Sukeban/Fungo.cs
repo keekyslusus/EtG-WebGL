@@ -27,6 +27,11 @@ namespace Sukeban
         public const float StrikeMemory = 4f;
         public const float StrikeoutSeconds = 3f;
 
+        // A grand slam (the Elbow Guard's permanent armor): GrandSlamHomeRuns home runs in a row, each within
+        // GrandSlamGap s of the one before (juggling), no other hit or strike between.
+        public const int GrandSlamHomeRuns = 3;
+        public const float GrandSlamGap = 1.2f;
+
         // the swings that hit balls: hers, and Casey in both forms
         public static bool IsBat(Gun gun)
         {
@@ -48,6 +53,8 @@ namespace Sukeban
         private float m_strikeMemory;
         private float m_lockout;
         private float m_strikeout;
+        private int m_homeRuns;
+        private float m_lastHomeRun = -100f;
 
         public static void Init()
         {
@@ -212,6 +219,24 @@ namespace Sukeban
                     Strike();
                     break;
             }
+            if (hit == FungoBall.Hit.None)
+            {
+                return;
+            }
+            if (hit != FungoBall.Hit.HomeRun || Time.time - m_lastHomeRun > GrandSlamGap)
+            {
+                m_homeRuns = 0;
+            }
+            if (hit == FungoBall.Hit.HomeRun)
+            {
+                m_homeRuns++;
+                m_lastHomeRun = Time.time;
+                if (m_homeRuns >= GrandSlamHomeRuns)
+                {
+                    m_homeRuns = 0;
+                    ArmoredElbowGuard.AwardPermanent(m_owner, "grand slam", "Grand slam!", "Гранд-слэм!");
+                }
+            }
         }
 
         private void Strike()
@@ -227,7 +252,9 @@ namespace Sukeban
             m_strikes = 0;
             m_strikeMemory = 0f;
             m_strikeout = StrikeoutSeconds;
+            m_homeRuns = 0;
             FungoBall.StrikeOut(m_owner);
+            ArmoredElbowGuard.BurnTemp(m_owner);
             FungoBall.Say(m_owner, "Strikeout!", "Страйкаут!");
             AkSoundEngine.PostEvent("Play_OBJ_purchase_unable_01", gameObject);
         }
